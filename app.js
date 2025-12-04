@@ -1,0 +1,373 @@
+// Google Calendar API Configuration
+const CLIENT_ID = 'YOUR_CLIENT_ID_HERE'; // User needs to replace this
+const API_KEY = 'YOUR_API_KEY_HERE'; // User needs to replace this
+const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest';
+const SCOPES = 'https://www.googleapis.com/auth/calendar.readonly';
+
+let tokenClient;
+let gapiInited = false;
+let gisInited = false;
+
+// DOM elements
+const authSection = document.getElementById('authSection');
+const loadingSection = document.getElementById('loadingSection');
+const eventsSection = document.getElementById('eventsSection');
+const errorSection = document.getElementById('errorSection');
+const eventsList = document.getElementById('eventsList');
+const errorMessage = document.getElementById('errorMessage');
+const authorizeBtn = document.getElementById('authorizeBtn');
+const refreshBtn = document.getElementById('refreshBtn');
+const retryBtn = document.getElementById('retryBtn');
+
+// Event listeners
+document.addEventListener('DOMContentLoaded', initializeApp);
+authorizeBtn.addEventListener('click', handleAuthClick);
+refreshBtn.addEventListener('click', loadCalendarEvents);
+retryBtn.addEventListener('click', loadCalendarEvents);
+
+/**
+ * Initialize the application
+ */
+function initializeApp() {
+    gapiLoaded();
+    gisLoaded();
+}
+
+/**
+ * Callback after api.js is loaded
+ */
+function gapiLoaded() {
+    gapi.load('client', async () => {
+        await gapi.client.init({
+            apiKey: API_KEY,
+            discoveryDocs: [DISCOVERY_DOC],
+        });
+        gapiInited = true;
+        maybeEnableButtons();
+    });
+}
+
+/**
+ * Callback after the Google Identity Services script loads
+ */
+function gisLoaded() {
+    tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: SCOPES,
+        callback: '', // defined later
+    });
+    gisInited = true;
+    maybeEnableButtons();
+}
+
+/**
+ * Enables user interaction after all libraries are loaded
+ */
+function maybeEnableButtons() {
+    if (gapiInited && gisInited) {
+        // Check if already authorized
+        const token = gapi.client.getToken();
+        if (token) {
+            showSection('loading');
+            loadCalendarEvents();
+        }
+    }
+}
+
+/**
+ * Handle authorization button click
+ */
+function handleAuthClick() {
+    tokenClient.callback = async (resp) => {
+        if (resp.error !== undefined) {
+            showError(resp.error);
+            return;
+        }
+        showSection('loading');
+        await loadCalendarEvents();
+    };
+
+    if (gapi.client.getToken() === null) {
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+    } else {
+        tokenClient.requestAccessToken({ prompt: '' });
+    }
+}
+
+/**
+ * Show specific section and hide others
+ */
+function showSection(section) {
+    authSection.classList.add('hidden');
+    loadingSection.classList.add('hidden');
+    eventsSection.classList.add('hidden');
+    errorSection.classList.add('hidden');
+
+    switch (section) {
+        case 'auth':
+            authSection.classList.remove('hidden');
+            break;
+        case 'loading':
+            loadingSection.classList.remove('hidden');
+            break;
+        case 'events':
+            eventsSection.classList.remove('hidden');
+            break;
+        case 'error':
+            errorSection.classList.remove('hidden');
+            break;
+    }
+}
+
+/**
+ * Show error message
+ */
+function showError(message) {
+    errorMessage.textContent = message;
+    showSection('error');
+}
+
+/**
+ * Load calendar events from all calendars
+ */
+async function loadCalendarEvents() {
+    try {
+        showSection('loading');
+
+        // Get date range for next 3 months
+        const now = new Date();
+        const threeMonthsLater = new Date();
+        threeMonthsLater.setMonth(now.getMonth() + 3);
+
+        // Get all calendars
+        const calendarListResponse = await gapi.client.calendar.calendarList.list();
+        const calendars = calendarListResponse.result.items;
+
+        if (!calendars || calendars.length === 0) {
+            showError('No calendars found');
+            return;
+        }
+
+        // Fetch events from all calendars
+        const allEventsPromises = calendars.map(async (calendar) => {
+            try {
+                const response = await gapi.client.calendar.events.list({
+                    calendarId: calendar.id,
+                    timeMin: now.toISOString(),
+                    timeMax: threeMonthsLater.toISOString(),
+                    showDeleted: false,
+                    singleEvents: true, // Expand recurring events
+                    maxResults: 250,
+                    orderBy: 'startTime',
+                });
+
+                return {
+                    calendarName: calendar.summary,
+                    events: response.result.items || []
+                };
+            } catch (error) {
+                console.error(`Error fetching events from ${calendar.summary}:`, error);
+                return {
+                    calendarName: calendar.summary,
+                    events: []
+                };
+            }
+        });
+
+        const calendarEvents = await Promise.all(allEventsPromises);
+
+        // Flatten and filter events
+        let allEvents = [];
+        calendarEvents.forEach(({ calendarName, events }) => {
+            events.forEach(event => {
+                event.calendarName = calendarName;
+                allEvents.push(event);
+            });
+        });
+
+        // Filter events based on criteria
+        const filteredEvents = filterEvents(allEvents);
+
+        // Sort events by date
+        filteredEvents.sort((a, b) => {
+            const dateA = new Date(a.start.dateTime || a.start.date);
+            const dateB = new Date(b.start.dateTime || b.start.date);
+            return dateA - dateB;
+        });
+
+        // Display events
+        displayEvents(filteredEvents);
+
+    } catch (error) {
+        console.error('Error loading calendar events:', error);
+        showError('Failed to load calendar events. Please try again.');
+    }
+}
+
+/**
+ * Filter events based on user criteria
+ */
+function filterEvents(events) {
+    return events.filter(event => {
+        const title = (event.summary || '').toLowerCase();
+
+        // Exclude birthdays
+        if (event.eventType === 'birthday' || title.includes('birthday')) {
+            return false;
+        }
+
+        // Exclude Martin Luther King Day
+        if (title.includes('martin luther king')) {
+            return false;
+        }
+
+        // Exclude recurring events (keep single instances from expanded recurring events)
+        // If the event has a recurringEventId, it's an instance of a recurring event
+        if (event.recurringEventId) {
+            return false;
+        }
+
+        // Exclude events with recurrence rules (unexpanded recurring events)
+        if (event.recurrence && event.recurrence.length > 0) {
+            return false;
+        }
+
+        return true;
+    });
+}
+
+/**
+ * Display events grouped by month
+ */
+function displayEvents(events) {
+    if (events.length === 0) {
+        eventsList.innerHTML = '<div class="no-events">No events found for the next 3 months</div>';
+        showSection('events');
+        return;
+    }
+
+    // Group events by month
+    const eventsByMonth = {};
+    events.forEach(event => {
+        const eventDate = new Date(event.start.dateTime || event.start.date);
+        const monthKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}`;
+        const monthName = eventDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+
+        if (!eventsByMonth[monthKey]) {
+            eventsByMonth[monthKey] = {
+                name: monthName,
+                events: []
+            };
+        }
+
+        eventsByMonth[monthKey].events.push(event);
+    });
+
+    // Build HTML
+    let html = '';
+    Object.keys(eventsByMonth).sort().forEach(monthKey => {
+        const month = eventsByMonth[monthKey];
+        html += `
+            <div class="month-group">
+                <div class="month-header">${month.name}</div>
+                ${month.events.map(event => createEventHTML(event)).join('')}
+            </div>
+        `;
+    });
+
+    eventsList.innerHTML = html;
+    showSection('events');
+}
+
+/**
+ * Create HTML for a single event
+ */
+function createEventHTML(event) {
+    const title = event.summary || 'No title';
+    const calendarName = event.calendarName || 'Unknown calendar';
+    const isHoliday = isHolidayEvent(event);
+
+    // Format date
+    let dateStr = '';
+    let timeStr = '';
+
+    if (event.start.dateTime) {
+        const startDate = new Date(event.start.dateTime);
+        const endDate = new Date(event.end.dateTime);
+
+        dateStr = startDate.toLocaleDateString('en-US', {
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric'
+        });
+
+        timeStr = `${startDate.toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit'
+        })} - ${endDate.toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit'
+        })}`;
+    } else {
+        // All-day event
+        const date = new Date(event.start.date);
+        dateStr = date.toLocaleDateString('en-US', {
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric'
+        });
+        timeStr = 'All day';
+    }
+
+    return `
+        <div class="event-item ${isHoliday ? 'holiday' : ''}">
+            <div class="event-date">${dateStr}</div>
+            <div class="event-title">${escapeHtml(title)}</div>
+            <div class="event-calendar">${escapeHtml(calendarName)}</div>
+            <div class="event-time">${timeStr}</div>
+        </div>
+    `;
+}
+
+/**
+ * Check if event is a holiday
+ */
+function isHolidayEvent(event) {
+    const title = (event.summary || '').toLowerCase();
+    const calendarName = (event.calendarName || '').toLowerCase();
+
+    // Check if from holidays calendar
+    if (calendarName.includes('holiday')) {
+        return true;
+    }
+
+    // Check for common holiday keywords
+    const holidayKeywords = [
+        'holiday', 'christmas', 'thanksgiving', 'new year',
+        'independence day', 'memorial day', 'labor day',
+        'veterans day', 'presidents day', 'columbus day',
+        'easter', 'passover', 'hanukkah', 'diwali'
+    ];
+
+    return holidayKeywords.some(keyword => title.includes(keyword));
+}
+
+/**
+ * Escape HTML to prevent XSS
+ */
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+/**
+ * Register service worker for PWA
+ */
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('service-worker.js')
+            .then(registration => console.log('Service Worker registered'))
+            .catch(err => console.log('Service Worker registration failed:', err));
+    });
+}

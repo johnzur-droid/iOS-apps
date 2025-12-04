@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Calendar View">
+    <title>3-Month Calendar View</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon.png">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📅 Next 3 Months</h1>
+            <button id="refreshBtn" class="refresh-btn">🔄 Refresh</button>
+        </header>
+
+        <div id="authSection" class="auth-section">
+            <p>Connect your Google Calendar to view events</p>
+            <button id="authorizeBtn" class="auth-btn">Connect Google Calendar</button>
+        </div>
+
+        <div id="loadingSection" class="loading-section hidden">
+            <div class="spinner"></div>
+            <p>Loading your calendar events...</p>
+        </div>
+
+        <div id="eventsSection" class="events-section hidden">
+            <div id="eventsList" class="events-list"></div>
+        </div>
+
+        <div id="errorSection" class="error-section hidden">
+            <p id="errorMessage"></p>
+            <button id="retryBtn" class="retry-btn">Try Again</button>
+        </div>
+    </div>
+
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="app.js"></script>
+</body>
+</html>
