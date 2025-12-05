@@ -119,13 +119,18 @@ function handleAuthClick() {
                 showError('Authentication error: ' + resp.error);
                 return;
             }
+            // Mark that user has authorized before
+            localStorage.setItem('calendar_authorized', 'true');
             showSection('loading');
             await loadCalendarEvents();
         };
 
         console.log('Requesting access token...');
+        const hasAuthorizedBefore = localStorage.getItem('calendar_authorized');
+
         if (gapi.client.getToken() === null) {
-            tokenClient.requestAccessToken({ prompt: 'consent' });
+            // Use 'select_account' instead of 'consent' to avoid full consent flow every time
+            tokenClient.requestAccessToken({ prompt: hasAuthorizedBefore ? '' : 'select_account' });
         } else {
             tokenClient.requestAccessToken({ prompt: '' });
         }
