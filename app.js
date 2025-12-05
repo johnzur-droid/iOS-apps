@@ -20,18 +20,14 @@ const refreshBtn = document.getElementById('refreshBtn');
 const retryBtn = document.getElementById('retryBtn');
 
 // Event listeners
-document.addEventListener('DOMContentLoaded', initializeApp);
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('DOM loaded');
+});
 authorizeBtn.addEventListener('click', handleAuthClick);
 refreshBtn.addEventListener('click', loadCalendarEvents);
-retryBtn.addEventListener('click', loadCalendarEvents);
-
-/**
- * Initialize the application
- */
-function initializeApp() {
-    gapiLoaded();
-    gisLoaded();
-}
+retryBtn.addEventListener('click', () => {
+    showSection('auth');
+});
 
 /**
  * Callback after api.js is loaded
@@ -98,19 +94,40 @@ function maybeEnableButtons() {
  * Handle authorization button click
  */
 function handleAuthClick() {
-    tokenClient.callback = async (resp) => {
-        if (resp.error !== undefined) {
-            showError(resp.error);
-            return;
-        }
-        showSection('loading');
-        await loadCalendarEvents();
-    };
+    console.log('Auth button clicked');
 
-    if (gapi.client.getToken() === null) {
-        tokenClient.requestAccessToken({ prompt: 'consent' });
-    } else {
-        tokenClient.requestAccessToken({ prompt: '' });
+    // Check if libraries are initialized
+    if (!gapiInited || !gisInited) {
+        showError('Application not fully loaded. Please wait a moment and try again.');
+        console.error('gapiInited:', gapiInited, 'gisInited:', gisInited);
+        return;
+    }
+
+    if (!tokenClient) {
+        showError('Authentication not initialized. Please refresh the page.');
+        return;
+    }
+
+    try {
+        tokenClient.callback = async (resp) => {
+            console.log('OAuth callback received:', resp);
+            if (resp.error !== undefined) {
+                showError('Authentication error: ' + resp.error);
+                return;
+            }
+            showSection('loading');
+            await loadCalendarEvents();
+        };
+
+        console.log('Requesting access token...');
+        if (gapi.client.getToken() === null) {
+            tokenClient.requestAccessToken({ prompt: 'consent' });
+        } else {
+            tokenClient.requestAccessToken({ prompt: '' });
+        }
+    } catch (error) {
+        console.error('Error during authentication:', error);
+        showError('Authentication failed: ' + error.message);
     }
 }
 
