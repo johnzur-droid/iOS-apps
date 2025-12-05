@@ -37,13 +37,23 @@ function initializeApp() {
  * Callback after api.js is loaded
  */
 function gapiLoaded() {
+    if (typeof gapi === 'undefined') {
+        console.error('Google API library failed to load');
+        setTimeout(gapiLoaded, 1000); // Retry after 1 second
+        return;
+    }
     gapi.load('client', async () => {
-        await gapi.client.init({
-            apiKey: API_KEY,
-            discoveryDocs: [DISCOVERY_DOC],
-        });
-        gapiInited = true;
-        maybeEnableButtons();
+        try {
+            await gapi.client.init({
+                apiKey: API_KEY,
+                discoveryDocs: [DISCOVERY_DOC],
+            });
+            gapiInited = true;
+            maybeEnableButtons();
+        } catch (error) {
+            console.error('Error initializing GAPI client:', error);
+            showError('Failed to initialize Google API. Please refresh the page.');
+        }
     });
 }
 
@@ -51,13 +61,23 @@ function gapiLoaded() {
  * Callback after the Google Identity Services script loads
  */
 function gisLoaded() {
-    tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: CLIENT_ID,
-        scope: SCOPES,
-        callback: '', // defined later
-    });
-    gisInited = true;
-    maybeEnableButtons();
+    if (typeof google === 'undefined') {
+        console.error('Google Identity Services library failed to load');
+        setTimeout(gisLoaded, 1000); // Retry after 1 second
+        return;
+    }
+    try {
+        tokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: CLIENT_ID,
+            scope: SCOPES,
+            callback: '', // defined later
+        });
+        gisInited = true;
+        maybeEnableButtons();
+    } catch (error) {
+        console.error('Error initializing Google Identity Services:', error);
+        showError('Failed to initialize authentication. Please refresh the page.');
+    }
 }
 
 /**
@@ -200,7 +220,15 @@ async function loadCalendarEvents() {
 
     } catch (error) {
         console.error('Error loading calendar events:', error);
-        showError('Failed to load calendar events. Please try again.');
+        let errorMsg = 'Failed to load calendar events. ';
+        if (error.result && error.result.error) {
+            errorMsg += error.result.error.message;
+        } else if (error.message) {
+            errorMsg += error.message;
+        } else {
+            errorMsg += 'Please try again.';
+        }
+        showError(errorMsg);
     }
 }
 
