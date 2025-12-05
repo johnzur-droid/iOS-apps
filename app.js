@@ -320,7 +320,17 @@ function displayEvents(events) {
     // Group events by month
     const eventsByMonth = {};
     events.forEach(event => {
-        const eventDate = new Date(event.start.dateTime || event.start.date);
+        // Parse date correctly to avoid timezone issues
+        let eventDate;
+        if (event.start.date) {
+            // All-day event - parse without timezone conversion
+            const [year, month, day] = event.start.date.split('-').map(Number);
+            eventDate = new Date(year, month - 1, day);
+        } else {
+            // Timed event
+            eventDate = new Date(event.start.dateTime);
+        }
+
         const monthKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}`;
         const monthName = eventDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
 
@@ -358,7 +368,17 @@ function createEventHTML(event) {
     const isHoliday = isHolidayEvent(event);
 
     // Format date - simple format: "Mon, Dec 5"
-    const eventDate = new Date(event.start.dateTime || event.start.date);
+    let eventDate;
+
+    if (event.start.date) {
+        // All-day event - parse date without timezone conversion
+        const [year, month, day] = event.start.date.split('-').map(Number);
+        eventDate = new Date(year, month - 1, day);
+    } else {
+        // Timed event - use dateTime
+        eventDate = new Date(event.start.dateTime);
+    }
+
     const dateStr = eventDate.toLocaleDateString('en-US', {
         weekday: 'short',
         month: 'short',
