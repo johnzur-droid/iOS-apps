@@ -84,8 +84,12 @@ function maybeEnableButtons() {
         // Check if already authorized
         const token = gapi.client.getToken();
         if (token) {
+            console.log('Already authorized, loading events...');
             showSection('loading');
             loadCalendarEvents();
+        } else {
+            console.log('Not authorized, showing auth button');
+            showSection('auth');
         }
     }
 }
