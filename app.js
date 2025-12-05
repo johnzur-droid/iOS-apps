@@ -178,14 +178,31 @@ async function loadCalendarEvents() {
 
         // Get all calendars
         const calendarListResponse = await gapi.client.calendar.calendarList.list();
-        const calendars = calendarListResponse.result.items;
+        const allCalendars = calendarListResponse.result.items;
 
-        if (!calendars || calendars.length === 0) {
+        if (!allCalendars || allCalendars.length === 0) {
             showError('No calendars found');
             return;
         }
 
-        // Fetch events from all calendars
+        // Filter to only include specific calendars
+        const allowedCalendars = ['johnzur@gmail.com', 'tj', 'holiday'];
+        const calendars = allCalendars.filter(calendar => {
+            const calName = calendar.summary.toLowerCase();
+            const calId = calendar.id.toLowerCase();
+            return allowedCalendars.some(allowed =>
+                calName.includes(allowed) || calId.includes(allowed)
+            );
+        });
+
+        console.log('Filtered calendars:', calendars.map(c => c.summary));
+
+        if (calendars.length === 0) {
+            showError('No matching calendars found (looking for: johnzur@gmail.com, TJ, Holiday)');
+            return;
+        }
+
+        // Fetch events from filtered calendars
         const allEventsPromises = calendars.map(async (calendar) => {
             try {
                 const response = await gapi.client.calendar.events.list({
@@ -325,51 +342,25 @@ function displayEvents(events) {
 }
 
 /**
- * Create HTML for a single event
+ * Create HTML for a single event (simplified single line format)
  */
 function createEventHTML(event) {
     const title = event.summary || 'No title';
-    const calendarName = event.calendarName || 'Unknown calendar';
     const isHoliday = isHolidayEvent(event);
 
-    // Format date
-    let dateStr = '';
-    let timeStr = '';
-
-    if (event.start.dateTime) {
-        const startDate = new Date(event.start.dateTime);
-        const endDate = new Date(event.end.dateTime);
-
-        dateStr = startDate.toLocaleDateString('en-US', {
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric'
-        });
-
-        timeStr = `${startDate.toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit'
-        })} - ${endDate.toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit'
-        })}`;
-    } else {
-        // All-day event
-        const date = new Date(event.start.date);
-        dateStr = date.toLocaleDateString('en-US', {
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric'
-        });
-        timeStr = 'All day';
-    }
+    // Format date - simple format: "Mon, Dec 5"
+    const eventDate = new Date(event.start.dateTime || event.start.date);
+    const dateStr = eventDate.toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric'
+    });
 
     return `
         <div class="event-item ${isHoliday ? 'holiday' : ''}">
-            <div class="event-date">${dateStr}</div>
-            <div class="event-title">${escapeHtml(title)}</div>
-            <div class="event-calendar">${escapeHtml(calendarName)}</div>
-            <div class="event-time">${timeStr}</div>
+            <span class="event-date-inline">${dateStr}</span>
+            <span class="event-separator">•</span>
+            <span class="event-title-inline">${escapeHtml(title)}</span>
         </div>
     `;
 }
