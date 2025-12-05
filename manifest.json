@@ -2,7 +2,7 @@
   "name": "3-Month Calendar View",
   "short_name": "Calendar",
   "description": "View your Google Calendar events for the next 3 months",
-  "start_url": "/iOS-apps/",
+  "start_url": "https://johnzur-droid.github.io/iOS-apps/",
   "display": "standalone",
   "background_color": "#667eea",
   "theme_color": "#667eea",
