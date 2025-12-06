@@ -19,6 +19,7 @@ let activeStatusFilter = 'ALL';
 
 // Gmail search queries - search by Gmail label first
 // Labels are: STORE, PAYPAL, AI, DIVIDED WE STAND, BMW, QUALITY-WEB-TIME (all uppercase)
+// NOTE: Labels with spaces need quotes in the query
 const FOLDER_SEARCHES = {
     'STORE': {
         label: 'STORE',
@@ -33,7 +34,7 @@ const FOLDER_SEARCHES = {
         query: null
     },
     'DIVIDED WE STAND': {
-        label: 'DIVIDED-WE-STAND',  // Gmail converts spaces to dashes in label search
+        label: '"DIVIDED WE STAND"',  // Labels with spaces need quotes
         query: null
     },
     'BMW': {
@@ -242,12 +243,44 @@ function updateProgress(message) {
 }
 
 /**
+ * Fetch and log all Gmail labels (for debugging)
+ */
+async function fetchGmailLabels() {
+    try {
+        const response = await gapi.client.gmail.users.labels.list({
+            userId: 'me'
+        });
+        const labels = response.result.labels || [];
+        console.log('=== Available Gmail Labels ===');
+        labels.forEach(label => {
+            console.log(`Label: "${label.name}" (id: ${label.id})`);
+        });
+        console.log('=== End Labels ===');
+        return labels;
+    } catch (error) {
+        console.error('Error fetching labels:', error);
+        return [];
+    }
+}
+
+/**
  * Main function: Scan Gmail for orders
  */
 async function scanGmailForOrders() {
     try {
         showSection('loading');
         allOrders = [];
+
+        // First, fetch labels to help debug
+        updateProgress('Fetching Gmail labels...');
+        const gmailLabels = await fetchGmailLabels();
+
+        // Create a map of label names to IDs
+        const labelMap = {};
+        gmailLabels.forEach(label => {
+            labelMap[label.name.toUpperCase()] = label.id;
+        });
+        console.log('Label map:', labelMap);
 
         // Calculate date 60 days ago
         const sixtyDaysAgo = new Date();
@@ -268,17 +301,28 @@ async function scanGmailForOrders() {
             try {
                 // Search by Gmail label if configured
                 if (config.label) {
-                    const labelQuery = `label:${config.label} ${dateQuery}`;
-                    console.log(`Searching: ${labelQuery}`);
-                    const labelOrders = await searchAndParseEmails(category, labelQuery);
-                    allOrders.push(...labelOrders);
+                    // Try using labelIds first (more reliable)
+                    const labelName = config.label.replace(/"/g, ''); // Remove quotes to match map
+                    const labelId = labelMap[labelName] || labelMap[labelName.toUpperCase()];
+
+                    if (labelId) {
+                        console.log(`Using labelId for ${category}: ${labelId}`);
+                        const labelOrders = await searchAndParseEmails(category, dateQuery, labelId);
+                        allOrders.push(...labelOrders);
+                    } else {
+                        // Fallback to query string search
+                        const labelQuery = `label:${config.label} ${dateQuery}`;
+                        console.log(`Using query search for ${category}: ${labelQuery}`);
+                        const labelOrders = await searchAndParseEmails(category, labelQuery, null);
+                        allOrders.push(...labelOrders);
+                    }
                 }
 
                 // Also search by keyword query if configured
                 if (config.query) {
                     const keywordQuery = `${config.query} ${dateQuery}`;
                     console.log(`Searching: ${keywordQuery}`);
-                    const orders = await searchAndParseEmails(category, keywordQuery);
+                    const orders = await searchAndParseEmails(category, keywordQuery, null);
                     allOrders.push(...orders);
                 }
             } catch (error) {
@@ -294,7 +338,7 @@ async function scanGmailForOrders() {
         updateProgress(`Deep scan for missed orders (${currentStep}/${totalSteps})...`);
         try {
             const broadQuery = `${BROAD_ORDER_SEARCH} ${dateQuery}`;
-            const broadOrders = await searchAndParseEmails('OTHER', broadQuery);
+            const broadOrders = await searchAndParseEmails('OTHER', broadQuery, null);
 
             // Only add orders that aren't already captured
             for (const order of broadOrders) {
@@ -357,16 +401,26 @@ function categorizeOrder(order) {
 /**
  * Search emails and parse order info
  */
-async function searchAndParseEmails(category, query) {
+async function searchAndParseEmails(category, query, labelId = null) {
     const orders = [];
 
     try {
-        // Search for messages - get more results
-        const response = await gapi.client.gmail.users.messages.list({
+        // Build request params
+        const params = {
             userId: 'me',
             q: query,
             maxResults: 100
-        });
+        };
+
+        // Add labelIds if provided (more reliable than query string)
+        if (labelId) {
+            params.labelIds = [labelId];
+        }
+
+        console.log(`API request for ${category}:`, params);
+
+        // Search for messages - get more results
+        const response = await gapi.client.gmail.users.messages.list(params);
 
         const messages = response.result.messages || [];
         console.log(`${category}: Found ${messages.length} emails`);
