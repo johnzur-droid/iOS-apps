@@ -17,40 +17,40 @@ let filteredOrders = [];
 let activeFilter = 'ALL';
 let activeStatusFilter = 'ALL';
 
-// Gmail search queries - much broader to catch all orders
-// First try to search by Gmail label, then fall back to keyword search
+// Gmail search queries - search by Gmail label first
+// Labels are: STORE, PAYPAL, AI, DIVIDED WE STAND, BMW, QUALITY-WEB-TIME (all uppercase)
 const FOLDER_SEARCHES = {
     'STORE': {
         label: 'STORE',
-        query: 'subject:(order OR confirmation OR shipped OR delivered OR receipt OR invoice OR purchase) -subject:(password OR verify OR survey OR unsubscribe)'
+        query: null  // Only search by label
     },
     'PAYPAL': {
         label: 'PAYPAL',
-        query: 'from:paypal.com (receipt OR payment OR sent OR received OR invoice)'
+        query: null
     },
     'AI': {
         label: 'AI',
-        query: 'from:(openai OR anthropic OR midjourney OR runway OR elevenlabs OR cursor OR perplexity OR replicate OR stability OR huggingface OR claude) (receipt OR invoice OR subscription OR payment OR charge)'
+        query: null
     },
     'DIVIDED WE STAND': {
-        label: 'DIVIDED WE STAND',
-        query: 'from:(dividedwestand OR "divided we stand") (order OR confirmation OR shipped OR receipt)'
+        label: 'DIVIDED-WE-STAND',  // Gmail converts spaces to dashes in label search
+        query: null
     },
     'BMW': {
         label: 'BMW',
-        query: 'from:bmw (order OR confirmation OR service OR parts OR receipt OR invoice OR appointment)'
+        query: null
     },
     'QUALITY WEB TIME': {
-        label: 'QUALITY WEB TIME',
-        query: 'from:(qualitywebtime OR "quality web time") (invoice OR receipt OR hosting OR domain OR renewal)'
+        label: 'QUALITY-WEB-TIME',  // User confirmed dashes
+        query: null
     },
     'AMAZON': {
         label: null,
-        query: 'from:amazon (order OR shipped OR delivered OR arriving OR out for delivery OR confirmation)'
+        query: 'from:amazon'  // All Amazon emails
     },
     'SUBSCRIPTIONS': {
         label: null,
-        query: '(subscription OR "recurring payment" OR "monthly charge" OR "annual charge" OR "renewal" OR "billing") (receipt OR invoice OR charged OR payment) -unsubscribe -"manage subscription"'
+        query: 'subject:(subscription OR renewal OR billing OR "monthly charge" OR "your receipt")'
     }
 };
 
@@ -266,20 +266,21 @@ async function scanGmailForOrders() {
             const config = FOLDER_SEARCHES[category];
 
             try {
-                // First try searching by Gmail label if configured
+                // Search by Gmail label if configured
                 if (config.label) {
-                    const labelQuery = `label:${config.label.replace(/ /g, '-')} ${dateQuery}`;
+                    const labelQuery = `label:${config.label} ${dateQuery}`;
+                    console.log(`Searching: ${labelQuery}`);
                     const labelOrders = await searchAndParseEmails(category, labelQuery);
-                    if (labelOrders.length > 0) {
-                        allOrders.push(...labelOrders);
-                        continue; // Found orders via label, skip keyword search
-                    }
+                    allOrders.push(...labelOrders);
                 }
 
-                // Fall back to keyword search
-                const keywordQuery = `${config.query} ${dateQuery}`;
-                const orders = await searchAndParseEmails(category, keywordQuery);
-                allOrders.push(...orders);
+                // Also search by keyword query if configured
+                if (config.query) {
+                    const keywordQuery = `${config.query} ${dateQuery}`;
+                    console.log(`Searching: ${keywordQuery}`);
+                    const orders = await searchAndParseEmails(category, keywordQuery);
+                    allOrders.push(...orders);
+                }
             } catch (error) {
                 console.error(`Error scanning ${category}:`, error);
             }
