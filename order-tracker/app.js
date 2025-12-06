@@ -17,41 +17,45 @@ let filteredOrders = [];
 let activeFilter = 'ALL';
 let activeStatusFilter = 'ALL';
 
-// Gmail label/folder to search query mapping
+// Gmail search queries - search by Gmail label first
+// Labels are: STORE, PAYPAL, AI, DIVIDED WE STAND, BMW, QUALITY-WEB-TIME (all uppercase)
 const FOLDER_SEARCHES = {
-    'STORE': [
-        'from:(nike.com OR patagonia.com OR apple.com OR rei.com OR allbirds.com OR uniqlo.com OR nordstrom.com OR target.com OR walmart.com OR bestbuy.com OR costco.com OR homedepot.com OR lowes.com)',
-        'subject:(order confirmation OR order confirmed OR your order OR purchase confirmation OR receipt)'
-    ],
-    'PAYPAL': [
-        'from:(paypal.com OR service@paypal.com)',
-        'subject:(receipt OR payment OR you paid OR you sent)'
-    ],
-    'AI': [
-        'from:(midjourney.com OR openai.com OR anthropic.com OR runway.com OR elevenlabs.io OR cursor.so OR perplexity.ai OR replicate.com OR stability.ai OR huggingface.co)',
-        'subject:(receipt OR invoice OR subscription OR payment OR order)'
-    ],
-    'DIVIDED WE STAND': [
-        'from:(dividedwestand OR divided-we-stand)',
-        'subject:(order OR confirmation OR shipping OR receipt)'
-    ],
-    'BMW': [
-        'from:(bmw.com OR bmwusa.com OR bmwparts OR shopbmwusa.com)',
-        'subject:(order OR confirmation OR service OR appointment OR receipt)'
-    ],
-    'QUALITY WEB TIME': [
-        'from:(qualitywebtime OR quality-web-time OR qwt)',
-        'subject:(invoice OR receipt OR hosting OR domain OR renewal)'
-    ],
-    'AMAZON': [
-        'from:(amazon.com OR shipment-tracking@amazon.com OR auto-confirm@amazon.com)',
-        'subject:(your order OR order confirmed OR shipped OR delivered OR arriving)'
-    ],
-    'SUBSCRIPTIONS': [
-        'from:(spotify.com OR netflix.com OR youtube.com OR apple.com OR adobe.com OR figma.com OR github.com OR dropbox.com OR notion.so OR slack.com OR zoom.us OR hulu.com OR disneyplus.com OR hbomax.com)',
-        'subject:(subscription OR renewal OR billing OR invoice OR receipt OR charged)'
-    ]
+    'STORE': {
+        label: 'STORE',
+        query: null  // Only search by label
+    },
+    'PAYPAL': {
+        label: 'PAYPAL',
+        query: null
+    },
+    'AI': {
+        label: 'AI',
+        query: null
+    },
+    'DIVIDED WE STAND': {
+        label: 'DIVIDED-WE-STAND',  // Gmail converts spaces to dashes in label search
+        query: null
+    },
+    'BMW': {
+        label: 'BMW',
+        query: null
+    },
+    'QUALITY WEB TIME': {
+        label: 'QUALITY-WEB-TIME',  // User confirmed dashes
+        query: null
+    },
+    'AMAZON': {
+        label: null,
+        query: 'from:amazon'  // All Amazon emails
+    },
+    'SUBSCRIPTIONS': {
+        label: null,
+        query: 'subject:(subscription OR renewal OR billing OR "monthly charge" OR "your receipt")'
+    }
 };
+
+// Additional broad search to catch anything missed
+const BROAD_ORDER_SEARCH = 'subject:(order confirmed OR order confirmation OR your order has shipped OR delivery OR "thank you for your order" OR receipt OR invoice) -subject:(password OR verify OR survey)';
 
 // Category colors
 const CATEGORY_COLORS = {
@@ -62,7 +66,8 @@ const CATEGORY_COLORS = {
     'DIVIDED WE STAND': '#E91E63',
     'BMW': '#1C69D4',
     'QUALITY WEB TIME': '#00BCD4',
-    'SUBSCRIPTIONS': '#FF5722'
+    'SUBSCRIPTIONS': '#FF5722',
+    'OTHER': '#607D8B'
 };
 
 // Status config
@@ -249,31 +254,71 @@ async function scanGmailForOrders() {
         sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
         const dateQuery = `after:${formatDateForQuery(sixtyDaysAgo)}`;
 
-        let totalCategories = Object.keys(FOLDER_SEARCHES).length;
-        let currentCategory = 0;
+        const categories = Object.keys(FOLDER_SEARCHES);
+        let totalSteps = categories.length + 1; // +1 for broad search
+        let currentStep = 0;
 
         // Search each category
-        for (const [category, searchTerms] of Object.entries(FOLDER_SEARCHES)) {
-            currentCategory++;
-            updateProgress(`Scanning ${category} (${currentCategory}/${totalCategories})...`);
+        for (const category of categories) {
+            currentStep++;
+            updateProgress(`Scanning ${category} (${currentStep}/${totalSteps})...`);
+
+            const config = FOLDER_SEARCHES[category];
 
             try {
-                const query = `${searchTerms.join(' ')} ${dateQuery}`;
-                const orders = await searchAndParseEmails(category, query);
-                allOrders.push(...orders);
+                // Search by Gmail label if configured
+                if (config.label) {
+                    const labelQuery = `label:${config.label} ${dateQuery}`;
+                    console.log(`Searching: ${labelQuery}`);
+                    const labelOrders = await searchAndParseEmails(category, labelQuery);
+                    allOrders.push(...labelOrders);
+                }
+
+                // Also search by keyword query if configured
+                if (config.query) {
+                    const keywordQuery = `${config.query} ${dateQuery}`;
+                    console.log(`Searching: ${keywordQuery}`);
+                    const orders = await searchAndParseEmails(category, keywordQuery);
+                    allOrders.push(...orders);
+                }
             } catch (error) {
                 console.error(`Error scanning ${category}:`, error);
             }
 
             // Small delay to avoid rate limiting
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+
+        // Do a broad search to catch anything missed
+        currentStep++;
+        updateProgress(`Deep scan for missed orders (${currentStep}/${totalSteps})...`);
+        try {
+            const broadQuery = `${BROAD_ORDER_SEARCH} ${dateQuery}`;
+            const broadOrders = await searchAndParseEmails('OTHER', broadQuery);
+
+            // Only add orders that aren't already captured
+            for (const order of broadOrders) {
+                const isDuplicate = allOrders.some(existing =>
+                    existing.id === order.id ||
+                    (existing.subject === order.subject && existing.orderDate === order.orderDate)
+                );
+                if (!isDuplicate) {
+                    // Try to categorize based on sender
+                    order.source = categorizeOrder(order);
+                    allOrders.push(order);
+                }
+            }
+        } catch (error) {
+            console.error('Error in broad search:', error);
         }
 
         // Sort by date (newest first)
         allOrders.sort((a, b) => new Date(b.orderDate) - new Date(a.orderDate));
 
-        // Remove duplicates based on order ID or subject similarity
+        // Remove duplicates
         allOrders = deduplicateOrders(allOrders);
+
+        console.log(`Found ${allOrders.length} total orders`);
 
         // Initialize filters and display
         createFilterButtons();
@@ -290,20 +335,41 @@ async function scanGmailForOrders() {
 }
 
 /**
+ * Try to categorize an order based on sender
+ */
+function categorizeOrder(order) {
+    const from = (order.from || '').toLowerCase();
+    const merchant = (order.merchant || '').toLowerCase();
+
+    if (from.includes('amazon') || merchant.includes('amazon')) return 'AMAZON';
+    if (from.includes('paypal')) return 'PAYPAL';
+    if (from.includes('bmw')) return 'BMW';
+    if (from.includes('dividedwestand') || from.includes('divided')) return 'DIVIDED WE STAND';
+    if (from.includes('qualitywebtime') || from.includes('qwt')) return 'QUALITY WEB TIME';
+    if (from.includes('openai') || from.includes('anthropic') || from.includes('midjourney') ||
+        from.includes('runway') || from.includes('cursor') || from.includes('perplexity')) return 'AI';
+    if (from.includes('spotify') || from.includes('netflix') || from.includes('adobe') ||
+        from.includes('apple') || from.includes('google') || from.includes('youtube')) return 'SUBSCRIPTIONS';
+
+    return 'STORE';
+}
+
+/**
  * Search emails and parse order info
  */
 async function searchAndParseEmails(category, query) {
     const orders = [];
 
     try {
-        // Search for messages
+        // Search for messages - get more results
         const response = await gapi.client.gmail.users.messages.list({
             userId: 'me',
             q: query,
-            maxResults: 50
+            maxResults: 100
         });
 
         const messages = response.result.messages || [];
+        console.log(`${category}: Found ${messages.length} emails`);
 
         // Fetch each message
         for (const msg of messages) {
@@ -369,31 +435,26 @@ function parseEmailToOrder(message, category) {
 }
 
 /**
- * Check if email is order-related
+ * Check if email is order-related - now more permissive
  */
 function isOrderEmail(subject, from, category) {
     const subjectLower = subject.toLowerCase();
     const fromLower = from.toLowerCase();
 
-    const orderKeywords = [
-        'order', 'confirmation', 'confirmed', 'receipt', 'invoice',
-        'shipped', 'delivered', 'arriving', 'purchase', 'payment',
-        'subscription', 'renewal', 'billing', 'charged', 'thank you for your order'
+    // Strong exclude patterns - definitely not orders
+    const strongExclude = [
+        'password reset', 'verify your email', 'sign in alert', 'login alert',
+        'security alert', 'suspicious', 'verify your account',
+        'unsubscribe', 'update your preferences'
     ];
 
-    // Check for order keywords in subject
-    const hasOrderKeyword = orderKeywords.some(keyword => subjectLower.includes(keyword));
+    if (strongExclude.some(pattern => subjectLower.includes(pattern))) {
+        return false;
+    }
 
-    // Exclude certain emails
-    const excludePatterns = [
-        'password reset', 'verify your email', 'sign in', 'login',
-        'survey', 'feedback', 'review your purchase', 'rate your',
-        'recommended for you', 'deals', 'sale', 'save', 'off your next'
-    ];
-
-    const isExcluded = excludePatterns.some(pattern => subjectLower.includes(pattern));
-
-    return hasOrderKeyword && !isExcluded;
+    // If it came from our search query, it's probably an order
+    // Be more permissive - the Gmail search already filtered
+    return true;
 }
 
 /**
@@ -821,7 +882,8 @@ function getCategoryIcon(source) {
         'DIVIDED WE STAND': '👕',
         'BMW': '🚗',
         'QUALITY WEB TIME': '🌐',
-        'SUBSCRIPTIONS': '↻'
+        'SUBSCRIPTIONS': '↻',
+        'OTHER': '🛍️'
     };
     return icons[source] || '📦';
 }
