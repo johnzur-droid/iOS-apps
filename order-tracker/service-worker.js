@@ -1,11 +1,10 @@
 // Order Tracker Service Worker
-const CACHE_NAME = 'order-tracker-v1';
+const CACHE_NAME = 'order-tracker-v2';
 const urlsToCache = [
     './',
     './index.html',
     './styles.css',
     './app.js',
-    './orders-data.js',
     './manifest.json',
     './icon-192.png',
     './icon-512.png'
@@ -43,28 +42,37 @@ self.addEventListener('activate', (event) => {
     self.clients.claim();
 });
 
-// Fetch event - serve from cache, fallback to network
+// Fetch event - network first for API calls, cache first for static assets
 self.addEventListener('fetch', (event) => {
+    const url = new URL(event.request.url);
+
+    // Network first for Google APIs
+    if (url.hostname.includes('googleapis.com') ||
+        url.hostname.includes('accounts.google.com') ||
+        url.hostname.includes('apis.google.com')) {
+        event.respondWith(
+            fetch(event.request)
+                .catch(() => caches.match(event.request))
+        );
+        return;
+    }
+
+    // Cache first for static assets
     event.respondWith(
         caches.match(event.request)
             .then((response) => {
-                // Return cached response if found
                 if (response) {
                     return response;
                 }
 
-                // Clone the request
                 const fetchRequest = event.request.clone();
 
-                // Make network request
                 return fetch(fetchRequest)
                     .then((response) => {
-                        // Check if valid response
                         if (!response || response.status !== 200 || response.type !== 'basic') {
                             return response;
                         }
 
-                        // Clone and cache the response
                         const responseToCache = response.clone();
                         caches.open(CACHE_NAME)
                             .then((cache) => {
@@ -74,7 +82,6 @@ self.addEventListener('fetch', (event) => {
                         return response;
                     })
                     .catch(() => {
-                        // Return offline fallback for navigation requests
                         if (event.request.mode === 'navigate') {
                             return caches.match('./index.html');
                         }

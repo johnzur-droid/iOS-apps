@@ -443,6 +443,185 @@ html, body {
     color: #80deea;
 }
 
+/* Auth Section */
+.auth-section {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 24px;
+    background: var(--bg-secondary);
+}
+
+.auth-content {
+    text-align: center;
+    max-width: 320px;
+}
+
+.auth-icon {
+    font-size: 64px;
+    margin-bottom: 24px;
+}
+
+.auth-content h2 {
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: var(--text-primary);
+}
+
+.auth-content p {
+    font-size: 15px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: 24px;
+}
+
+.auth-btn {
+    width: 100%;
+    padding: 16px 24px;
+    border: none;
+    border-radius: 12px;
+    background: var(--accent);
+    color: white;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.auth-btn:active {
+    transform: scale(0.98);
+    opacity: 0.9;
+}
+
+.auth-note {
+    font-size: 12px !important;
+    color: var(--text-muted) !important;
+    margin-top: 16px !important;
+    margin-bottom: 0 !important;
+}
+
+/* Loading Section */
+.loading-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 24px;
+    background: var(--bg-secondary);
+    text-align: center;
+}
+
+.loading-section .spinner {
+    width: 50px;
+    height: 50px;
+    margin-bottom: 24px;
+}
+
+.loading-section p {
+    font-size: 16px;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+
+.loading-note {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+/* Error Section */
+.error-section {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 24px;
+    background: var(--bg-secondary);
+}
+
+.error-content {
+    text-align: center;
+    max-width: 320px;
+}
+
+.error-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+}
+
+.error-content p {
+    font-size: 15px;
+    color: var(--text-secondary);
+    margin-bottom: 24px;
+    line-height: 1.5;
+}
+
+.retry-btn {
+    padding: 14px 32px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: white;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.retry-btn:active {
+    opacity: 0.9;
+}
+
+/* Orders Section */
+.orders-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-primary);
+}
+
+/* Hidden class */
+.hidden {
+    display: none !important;
+}
+
+/* Order Details - Additional styles */
+.order-subject {
+    font-size: 13px;
+    color: var(--text-primary);
+    margin-top: 12px;
+    margin-bottom: 8px;
+    line-height: 1.4;
+}
+
+.order-from {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.order-snippet {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
+    margin-top: 8px;
+    padding: 10px;
+    background: var(--bg-primary);
+    border-radius: 8px;
+}
+
+.subscription-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    background: rgba(156, 39, 176, 0.2);
+    color: #ce93d8;
+    margin-top: 8px;
+}
+
 /* Footer */
 .app-footer {
     display: flex;
