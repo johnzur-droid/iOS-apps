@@ -170,22 +170,44 @@ function updateProgress(message) {
     console.log('Progress:', message);
 }
 
+// Debug output to screen (so user can see without developer tools)
+const debugOutputEl = document.getElementById('debugOutput');
+function debugLog(message, type = 'info') {
+    console.log(message);
+    if (debugOutputEl) {
+        const line = document.createElement('div');
+        line.className = `debug-line ${type}`;
+        line.textContent = message;
+        debugOutputEl.appendChild(line);
+        debugOutputEl.scrollTop = debugOutputEl.scrollHeight;
+    }
+}
+
+function clearDebug() {
+    if (debugOutputEl) debugOutputEl.innerHTML = '';
+}
+
 /**
  * MAIN SCAN FUNCTION
  */
 async function scanGmailForOrders() {
     try {
         showSection('loading');
+        clearDebug();
         allOrders = [];
 
         // Step 1: Get all Gmail labels
         updateProgress('Fetching Gmail labels...');
+        debugLog('Fetching all Gmail labels...', 'info');
+
         const labelsResponse = await gapi.client.gmail.users.labels.list({ userId: 'me' });
         const allLabels = labelsResponse.result.labels || [];
 
-        console.log('=== ALL GMAIL LABELS ===');
-        allLabels.forEach(l => console.log(`  "${l.name}" => ${l.id}`));
-        console.log('========================');
+        debugLog(`Found ${allLabels.length} total labels in Gmail`, 'info');
+
+        // Show all user labels (not system ones)
+        const userLabels = allLabels.filter(l => l.type === 'user');
+        debugLog(`User labels: ${userLabels.map(l => l.name).join(', ')}`, 'info');
 
         // Step 2: Find matching labels (case-insensitive)
         const labelMatches = {};
@@ -196,9 +218,9 @@ async function scanGmailForOrders() {
             );
             if (found) {
                 labelMatches[targetLabel] = found;
-                console.log(`✓ Found label "${targetLabel}" => id: ${found.id}`);
+                debugLog(`✓ FOUND: "${targetLabel}" => ${found.name} (${found.id})`, 'found');
             } else {
-                console.log(`✗ Label "${targetLabel}" NOT FOUND`);
+                debugLog(`✗ NOT FOUND: "${targetLabel}"`, 'not-found');
             }
         }
 
@@ -216,7 +238,7 @@ async function scanGmailForOrders() {
             updateProgress(`Searching ${labelName} (${searchNum}/${totalSearches})...`);
 
             const emails = await getAllEmailsWithLabel(labelInfo.id, afterDate);
-            console.log(`${labelName}: Found ${emails.length} emails`);
+            debugLog(`${labelName}: ${emails.length} emails found`, emails.length > 0 ? 'found' : 'not-found');
 
             for (const email of emails) {
                 const order = emailToOrder(email, labelName);
@@ -230,7 +252,7 @@ async function scanGmailForOrders() {
             updateProgress(`Searching ${category} (${searchNum}/${totalSearches})...`);
 
             const emails = await searchEmailsByQuery(`${query} after:${afterDate}`);
-            console.log(`${category}: Found ${emails.length} emails`);
+            debugLog(`${category}: ${emails.length} emails found`, emails.length > 0 ? 'found' : 'not-found');
 
             for (const email of emails) {
                 // Skip if already found
@@ -244,7 +266,7 @@ async function scanGmailForOrders() {
         allOrders.sort((a, b) => new Date(b.orderDate) - new Date(a.orderDate));
         allOrders = deduplicateOrders(allOrders);
 
-        console.log(`=== TOTAL ORDERS FOUND: ${allOrders.length} ===`);
+        debugLog(`=== TOTAL: ${allOrders.length} orders ===`, 'info');
 
         createFilterButtons();
         createStatusFilterButtons();

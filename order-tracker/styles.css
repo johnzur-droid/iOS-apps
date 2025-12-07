@@ -531,6 +531,39 @@ html, body {
     color: var(--text-muted);
 }
 
+.debug-output {
+    margin-top: 20px;
+    padding: 12px;
+    background: var(--bg-primary);
+    border-radius: 8px;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-align: left;
+    max-height: 300px;
+    overflow-y: auto;
+    width: 100%;
+    max-width: 350px;
+}
+
+.debug-output .debug-line {
+    margin-bottom: 4px;
+    padding: 2px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.debug-output .found {
+    color: #4CAF50;
+}
+
+.debug-output .not-found {
+    color: #F44336;
+}
+
+.debug-output .info {
+    color: #2196F3;
+}
+
 /* Error Section */
 .error-section {
     flex: 1;
