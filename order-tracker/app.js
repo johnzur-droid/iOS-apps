@@ -1,7 +1,7 @@
 // Order Tracker - Gmail API Integration
 // Scans Gmail for order confirmations from the last 60 days
 
-// Google API Configuration (uses same credentials as calendar app)
+// Google API Configuration
 const CLIENT_ID = '457025763296-osgitgjro33vo2tcc5d2d596isroij5v.apps.googleusercontent.com';
 const API_KEY = 'AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
@@ -17,46 +17,14 @@ let filteredOrders = [];
 let activeFilter = 'ALL';
 let activeStatusFilter = 'ALL';
 
-// Gmail search queries - search by Gmail label first
-// Labels are: STORE, PAYPAL, AI, DIVIDED WE STAND, BMW, QUALITY-WEB-TIME (all uppercase)
-// NOTE: Labels with spaces need quotes in the query
-const FOLDER_SEARCHES = {
-    'STORE': {
-        label: 'STORE',
-        query: null  // Only search by label
-    },
-    'PAYPAL': {
-        label: 'PAYPAL',
-        query: null
-    },
-    'AI': {
-        label: 'AI',
-        query: null
-    },
-    'DIVIDED WE STAND': {
-        label: '"DIVIDED WE STAND"',  // Labels with spaces need quotes
-        query: null
-    },
-    'BMW': {
-        label: 'BMW',
-        query: null
-    },
-    'QUALITY WEB TIME': {
-        label: 'QUALITY-WEB-TIME',  // User confirmed dashes
-        query: null
-    },
-    'AMAZON': {
-        label: null,
-        query: 'from:amazon'  // All Amazon emails
-    },
-    'SUBSCRIPTIONS': {
-        label: null,
-        query: 'subject:(subscription OR renewal OR billing OR "monthly charge" OR "your receipt")'
-    }
-};
+// Gmail labels to search (exact names as they appear in Gmail)
+const LABEL_NAMES = ['STORE', 'PAYPAL', 'AI', 'DIVIDED WE STAND', 'BMW', 'QUALITY-WEB-TIME'];
 
-// Additional broad search to catch anything missed
-const BROAD_ORDER_SEARCH = 'subject:(order confirmed OR order confirmation OR your order has shipped OR delivery OR "thank you for your order" OR receipt OR invoice) -subject:(password OR verify OR survey)';
+// Additional keyword searches
+const KEYWORD_SEARCHES = {
+    'AMAZON': 'from:amazon',
+    'SUBSCRIPTIONS': 'subject:(subscription OR renewal OR billing OR receipt OR invoice OR "monthly charge")'
+};
 
 // Category colors
 const CATEGORY_COLORS = {
@@ -66,7 +34,7 @@ const CATEGORY_COLORS = {
     'AI': '#9C27B0',
     'DIVIDED WE STAND': '#E91E63',
     'BMW': '#1C69D4',
-    'QUALITY WEB TIME': '#00BCD4',
+    'QUALITY-WEB-TIME': '#00BCD4',
     'SUBSCRIPTIONS': '#FF5722',
     'OTHER': '#607D8B'
 };
@@ -100,19 +68,15 @@ const scanProgressEl = document.getElementById('scanProgress');
 
 // Event listeners
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker loaded');
+    console.log('Order Tracker v5 loaded');
 });
 
 if (authorizeBtn) authorizeBtn.addEventListener('click', handleAuthClick);
 if (refreshBtn) refreshBtn.addEventListener('click', () => scanGmailForOrders());
 if (retryBtn) retryBtn.addEventListener('click', () => showSection('auth'));
 
-/**
- * Callback after api.js is loaded
- */
 function gapiLoaded() {
     if (typeof gapi === 'undefined') {
-        console.error('Google API library failed to load');
         setTimeout(gapiLoaded, 1000);
         return;
     }
@@ -125,18 +89,14 @@ function gapiLoaded() {
             gapiInited = true;
             maybeEnableButtons();
         } catch (error) {
-            console.error('Error initializing GAPI client:', error);
-            showError('Failed to initialize Google API. Please refresh the page.');
+            console.error('GAPI init error:', error);
+            showError('Failed to initialize Google API.');
         }
     });
 }
 
-/**
- * Callback after Google Identity Services loads
- */
 function gisLoaded() {
     if (typeof google === 'undefined') {
-        console.error('Google Identity Services library failed to load');
         setTimeout(gisLoaded, 1000);
         return;
     }
@@ -149,68 +109,43 @@ function gisLoaded() {
         gisInited = true;
         maybeEnableButtons();
     } catch (error) {
-        console.error('Error initializing Google Identity Services:', error);
-        showError('Failed to initialize authentication. Please refresh the page.');
+        console.error('GIS init error:', error);
+        showError('Failed to initialize authentication.');
     }
 }
 
-/**
- * Enable buttons when APIs are ready
- */
 function maybeEnableButtons() {
     if (gapiInited && gisInited) {
         const token = gapi.client.getToken();
         if (token) {
-            console.log('Already authorized, scanning emails...');
             showSection('loading');
             scanGmailForOrders();
         } else {
-            console.log('Not authorized, showing auth button');
             showSection('auth');
         }
     }
 }
 
-/**
- * Handle auth button click
- */
 function handleAuthClick() {
-    if (!gapiInited || !gisInited) {
-        showError('Application not fully loaded. Please wait and try again.');
+    if (!gapiInited || !gisInited || !tokenClient) {
+        showError('Not ready. Please refresh.');
         return;
     }
 
-    if (!tokenClient) {
-        showError('Authentication not initialized. Please refresh the page.');
-        return;
-    }
-
-    try {
-        tokenClient.callback = async (resp) => {
-            if (resp.error !== undefined) {
-                showError('Authentication error: ' + resp.error);
-                return;
-            }
-            localStorage.setItem('orders_authorized', 'true');
-            showSection('loading');
-            await scanGmailForOrders();
-        };
-
-        const hasAuthorizedBefore = localStorage.getItem('orders_authorized');
-        if (gapi.client.getToken() === null) {
-            tokenClient.requestAccessToken({ prompt: hasAuthorizedBefore ? '' : 'select_account' });
-        } else {
-            tokenClient.requestAccessToken({ prompt: '' });
+    tokenClient.callback = async (resp) => {
+        if (resp.error) {
+            showError('Auth error: ' + resp.error);
+            return;
         }
-    } catch (error) {
-        console.error('Error during authentication:', error);
-        showError('Authentication failed: ' + error.message);
-    }
+        localStorage.setItem('orders_authorized', 'true');
+        showSection('loading');
+        await scanGmailForOrders();
+    };
+
+    const hasAuth = localStorage.getItem('orders_authorized');
+    tokenClient.requestAccessToken({ prompt: hasAuth ? '' : 'select_account' });
 }
 
-/**
- * Show/hide sections
- */
 function showSection(section) {
     authSection.classList.add('hidden');
     loadingSection.classList.add('hidden');
@@ -225,430 +160,248 @@ function showSection(section) {
     }
 }
 
-/**
- * Show error message
- */
 function showError(message) {
     errorMessage.textContent = message;
     showSection('error');
 }
 
-/**
- * Update scan progress
- */
 function updateProgress(message) {
-    if (scanProgressEl) {
-        scanProgressEl.textContent = message;
-    }
+    if (scanProgressEl) scanProgressEl.textContent = message;
+    console.log('Progress:', message);
 }
 
 /**
- * Fetch and log all Gmail labels (for debugging)
- */
-async function fetchGmailLabels() {
-    try {
-        const response = await gapi.client.gmail.users.labels.list({
-            userId: 'me'
-        });
-        const labels = response.result.labels || [];
-        console.log('=== Available Gmail Labels ===');
-        labels.forEach(label => {
-            console.log(`Label: "${label.name}" (id: ${label.id})`);
-        });
-        console.log('=== End Labels ===');
-        return labels;
-    } catch (error) {
-        console.error('Error fetching labels:', error);
-        return [];
-    }
-}
-
-/**
- * Main function: Scan Gmail for orders
+ * MAIN SCAN FUNCTION
  */
 async function scanGmailForOrders() {
     try {
         showSection('loading');
         allOrders = [];
 
-        // First, fetch labels to help debug
+        // Step 1: Get all Gmail labels
         updateProgress('Fetching Gmail labels...');
-        const gmailLabels = await fetchGmailLabels();
+        const labelsResponse = await gapi.client.gmail.users.labels.list({ userId: 'me' });
+        const allLabels = labelsResponse.result.labels || [];
 
-        // Create a map of label names to IDs
-        const labelMap = {};
-        gmailLabels.forEach(label => {
-            labelMap[label.name.toUpperCase()] = label.id;
-        });
-        console.log('Label map:', labelMap);
+        console.log('=== ALL GMAIL LABELS ===');
+        allLabels.forEach(l => console.log(`  "${l.name}" => ${l.id}`));
+        console.log('========================');
+
+        // Step 2: Find matching labels (case-insensitive)
+        const labelMatches = {};
+        for (const targetLabel of LABEL_NAMES) {
+            const found = allLabels.find(l =>
+                l.name.toUpperCase() === targetLabel.toUpperCase() ||
+                l.name.toUpperCase().replace(/[\s-]/g, '') === targetLabel.toUpperCase().replace(/[\s-]/g, '')
+            );
+            if (found) {
+                labelMatches[targetLabel] = found;
+                console.log(`✓ Found label "${targetLabel}" => id: ${found.id}`);
+            } else {
+                console.log(`✗ Label "${targetLabel}" NOT FOUND`);
+            }
+        }
 
         // Calculate date 60 days ago
         const sixtyDaysAgo = new Date();
         sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
-        const dateQuery = `after:${formatDateForQuery(sixtyDaysAgo)}`;
+        const afterDate = `${sixtyDaysAgo.getFullYear()}/${sixtyDaysAgo.getMonth() + 1}/${sixtyDaysAgo.getDate()}`;
 
-        const categories = Object.keys(FOLDER_SEARCHES);
-        let totalSteps = categories.length + 1; // +1 for broad search
-        let currentStep = 0;
+        // Step 3: Search each label with pagination
+        const totalSearches = Object.keys(labelMatches).length + Object.keys(KEYWORD_SEARCHES).length;
+        let searchNum = 0;
 
-        // Search each category
-        for (const category of categories) {
-            currentStep++;
-            updateProgress(`Scanning ${category} (${currentStep}/${totalSteps})...`);
+        for (const [labelName, labelInfo] of Object.entries(labelMatches)) {
+            searchNum++;
+            updateProgress(`Searching ${labelName} (${searchNum}/${totalSearches})...`);
 
-            const config = FOLDER_SEARCHES[category];
+            const emails = await getAllEmailsWithLabel(labelInfo.id, afterDate);
+            console.log(`${labelName}: Found ${emails.length} emails`);
 
-            try {
-                // Search by Gmail label if configured
-                if (config.label) {
-                    // Try using labelIds first (more reliable)
-                    const labelName = config.label.replace(/"/g, ''); // Remove quotes to match map
-                    const labelId = labelMap[labelName] || labelMap[labelName.toUpperCase()];
-
-                    if (labelId) {
-                        console.log(`Using labelId for ${category}: ${labelId}`);
-                        const labelOrders = await searchAndParseEmails(category, dateQuery, labelId);
-                        allOrders.push(...labelOrders);
-                    } else {
-                        // Fallback to query string search
-                        const labelQuery = `label:${config.label} ${dateQuery}`;
-                        console.log(`Using query search for ${category}: ${labelQuery}`);
-                        const labelOrders = await searchAndParseEmails(category, labelQuery, null);
-                        allOrders.push(...labelOrders);
-                    }
-                }
-
-                // Also search by keyword query if configured
-                if (config.query) {
-                    const keywordQuery = `${config.query} ${dateQuery}`;
-                    console.log(`Searching: ${keywordQuery}`);
-                    const orders = await searchAndParseEmails(category, keywordQuery, null);
-                    allOrders.push(...orders);
-                }
-            } catch (error) {
-                console.error(`Error scanning ${category}:`, error);
+            for (const email of emails) {
+                const order = emailToOrder(email, labelName);
+                if (order) allOrders.push(order);
             }
-
-            // Small delay to avoid rate limiting
-            await new Promise(resolve => setTimeout(resolve, 50));
         }
 
-        // Do a broad search to catch anything missed
-        currentStep++;
-        updateProgress(`Deep scan for missed orders (${currentStep}/${totalSteps})...`);
-        try {
-            const broadQuery = `${BROAD_ORDER_SEARCH} ${dateQuery}`;
-            const broadOrders = await searchAndParseEmails('OTHER', broadQuery, null);
+        // Step 4: Keyword searches (Amazon, Subscriptions)
+        for (const [category, query] of Object.entries(KEYWORD_SEARCHES)) {
+            searchNum++;
+            updateProgress(`Searching ${category} (${searchNum}/${totalSearches})...`);
 
-            // Only add orders that aren't already captured
-            for (const order of broadOrders) {
-                const isDuplicate = allOrders.some(existing =>
-                    existing.id === order.id ||
-                    (existing.subject === order.subject && existing.orderDate === order.orderDate)
-                );
-                if (!isDuplicate) {
-                    // Try to categorize based on sender
-                    order.source = categorizeOrder(order);
-                    allOrders.push(order);
-                }
+            const emails = await searchEmailsByQuery(`${query} after:${afterDate}`);
+            console.log(`${category}: Found ${emails.length} emails`);
+
+            for (const email of emails) {
+                // Skip if already found
+                if (allOrders.some(o => o.id === email.id)) continue;
+                const order = emailToOrder(email, category);
+                if (order) allOrders.push(order);
             }
-        } catch (error) {
-            console.error('Error in broad search:', error);
         }
 
-        // Sort by date (newest first)
+        // Sort and dedupe
         allOrders.sort((a, b) => new Date(b.orderDate) - new Date(a.orderDate));
-
-        // Remove duplicates
         allOrders = deduplicateOrders(allOrders);
 
-        console.log(`Found ${allOrders.length} total orders`);
+        console.log(`=== TOTAL ORDERS FOUND: ${allOrders.length} ===`);
 
-        // Initialize filters and display
         createFilterButtons();
         createStatusFilterButtons();
         applyFilters();
         updateLastUpdated();
-
         showSection('orders');
 
     } catch (error) {
-        console.error('Error scanning Gmail:', error);
-        showError('Failed to scan emails: ' + (error.message || 'Unknown error'));
+        console.error('Scan error:', error);
+        showError('Failed: ' + (error.message || 'Unknown error'));
     }
 }
 
 /**
- * Try to categorize an order based on sender
+ * Get ALL emails with a specific label (handles pagination)
  */
-function categorizeOrder(order) {
-    const from = (order.from || '').toLowerCase();
-    const merchant = (order.merchant || '').toLowerCase();
+async function getAllEmailsWithLabel(labelId, afterDate) {
+    const emails = [];
+    let pageToken = null;
+    let page = 0;
 
-    if (from.includes('amazon') || merchant.includes('amazon')) return 'AMAZON';
-    if (from.includes('paypal')) return 'PAYPAL';
-    if (from.includes('bmw')) return 'BMW';
-    if (from.includes('dividedwestand') || from.includes('divided')) return 'DIVIDED WE STAND';
-    if (from.includes('qualitywebtime') || from.includes('qwt')) return 'QUALITY WEB TIME';
-    if (from.includes('openai') || from.includes('anthropic') || from.includes('midjourney') ||
-        from.includes('runway') || from.includes('cursor') || from.includes('perplexity')) return 'AI';
-    if (from.includes('spotify') || from.includes('netflix') || from.includes('adobe') ||
-        from.includes('apple') || from.includes('google') || from.includes('youtube')) return 'SUBSCRIPTIONS';
+    do {
+        page++;
+        console.log(`  Fetching page ${page} for label ${labelId}...`);
 
-    return 'STORE';
+        const params = {
+            userId: 'me',
+            labelIds: [labelId],
+            q: `after:${afterDate}`,
+            maxResults: 100
+        };
+        if (pageToken) params.pageToken = pageToken;
+
+        const response = await gapi.client.gmail.users.messages.list(params);
+        const messages = response.result.messages || [];
+
+        console.log(`  Page ${page}: ${messages.length} messages`);
+
+        // Fetch full message details
+        for (const msg of messages) {
+            try {
+                const full = await gapi.client.gmail.users.messages.get({
+                    userId: 'me',
+                    id: msg.id,
+                    format: 'full'
+                });
+                emails.push(full.result);
+            } catch (e) {
+                console.error('Error fetching message:', e);
+            }
+        }
+
+        pageToken = response.result.nextPageToken;
+    } while (pageToken);
+
+    return emails;
 }
 
 /**
- * Search emails and parse order info
+ * Search emails by query string (handles pagination)
  */
-async function searchAndParseEmails(category, query, labelId = null) {
-    const orders = [];
+async function searchEmailsByQuery(query) {
+    const emails = [];
+    let pageToken = null;
 
-    try {
-        // Build request params
+    do {
         const params = {
             userId: 'me',
             q: query,
             maxResults: 100
         };
+        if (pageToken) params.pageToken = pageToken;
 
-        // Add labelIds if provided (more reliable than query string)
-        if (labelId) {
-            params.labelIds = [labelId];
-        }
-
-        console.log(`API request for ${category}:`, params);
-
-        // Search for messages - get more results
         const response = await gapi.client.gmail.users.messages.list(params);
-
         const messages = response.result.messages || [];
-        console.log(`${category}: Found ${messages.length} emails`);
 
-        // Fetch each message
         for (const msg of messages) {
             try {
-                const msgResponse = await gapi.client.gmail.users.messages.get({
+                const full = await gapi.client.gmail.users.messages.get({
                     userId: 'me',
                     id: msg.id,
                     format: 'full'
                 });
-
-                const order = parseEmailToOrder(msgResponse.result, category);
-                if (order) {
-                    orders.push(order);
-                }
-            } catch (error) {
-                console.error('Error fetching message:', error);
+                emails.push(full.result);
+            } catch (e) {
+                console.error('Error fetching message:', e);
             }
         }
-    } catch (error) {
-        console.error(`Error searching ${category}:`, error);
-    }
 
-    return orders;
+        pageToken = response.result.nextPageToken;
+    } while (pageToken);
+
+    return emails;
 }
 
 /**
- * Parse email message to order object
+ * Convert email to order object - MINIMAL FILTERING
  */
-function parseEmailToOrder(message, category) {
+function emailToOrder(message, category) {
     const headers = message.payload.headers;
     const subject = getHeader(headers, 'Subject') || 'No Subject';
     const from = getHeader(headers, 'From') || '';
     const date = getHeader(headers, 'Date') || '';
 
-    // Skip if not an order-related email
-    if (!isOrderEmail(subject, from, category)) {
+    // Only exclude obvious non-orders
+    const subjectLower = subject.toLowerCase();
+    const skipPatterns = ['password reset', 'verify your email', 'sign in', 'security alert'];
+    if (skipPatterns.some(p => subjectLower.includes(p))) {
         return null;
     }
 
-    // Parse email body
     const body = getEmailBody(message.payload);
-
-    // Extract order details
-    const orderInfo = extractOrderDetails(subject, body, from, category);
-
-    // Determine status based on keywords
+    const price = extractPrice(body);
     const status = determineStatus(subject, body);
 
     return {
         id: message.id,
         source: category,
         orderDate: new Date(date).toISOString().split('T')[0],
-        items: orderInfo.items,
-        totalPrice: orderInfo.price,
+        items: [{ name: cleanSubject(subject), quantity: 1, price: price }],
+        totalPrice: price,
         status: status,
         subject: subject,
         from: extractSenderName(from),
-        merchant: extractMerchant(from, category),
-        trackingNumber: orderInfo.tracking,
-        isSubscription: category === 'SUBSCRIPTIONS' || isSubscriptionEmail(subject, body),
+        merchant: extractMerchant(from),
+        trackingNumber: null,
+        isSubscription: category === 'SUBSCRIPTIONS' || subjectLower.includes('subscription'),
         snippet: message.snippet
     };
 }
 
-/**
- * Check if email is order-related - now more permissive
- */
-function isOrderEmail(subject, from, category) {
-    const subjectLower = subject.toLowerCase();
-    const fromLower = from.toLowerCase();
-
-    // Strong exclude patterns - definitely not orders
-    const strongExclude = [
-        'password reset', 'verify your email', 'sign in alert', 'login alert',
-        'security alert', 'suspicious', 'verify your account',
-        'unsubscribe', 'update your preferences'
-    ];
-
-    if (strongExclude.some(pattern => subjectLower.includes(pattern))) {
-        return false;
-    }
-
-    // If it came from our search query, it's probably an order
-    // Be more permissive - the Gmail search already filtered
-    return true;
-}
-
-/**
- * Extract order details from email body
- */
-function extractOrderDetails(subject, body, from, category) {
-    let price = 0;
-    let items = [];
-    let tracking = null;
-
-    // Extract price - look for currency patterns
-    const pricePatterns = [
-        /\$\s*([\d,]+\.?\d*)/g,
-        /USD\s*([\d,]+\.?\d*)/gi,
-        /Total:?\s*\$?([\d,]+\.?\d*)/gi,
-        /Amount:?\s*\$?([\d,]+\.?\d*)/gi,
-        /Charged:?\s*\$?([\d,]+\.?\d*)/gi
-    ];
-
-    const prices = [];
-    for (const pattern of pricePatterns) {
-        const matches = body.matchAll(pattern);
-        for (const match of matches) {
-            const value = parseFloat(match[1].replace(/,/g, ''));
-            if (value > 0 && value < 100000) {
-                prices.push(value);
-            }
-        }
-    }
-
-    // Use the largest reasonable price as the total
-    if (prices.length > 0) {
-        price = Math.max(...prices.filter(p => p < 10000));
-    }
-
-    // Extract tracking number
-    const trackingPatterns = [
-        /(?:tracking|track)[:\s#]*([A-Z0-9]{10,30})/gi,
-        /(?:1Z)[A-Z0-9]{16}/g,  // UPS
-        /(?:94|93|92|91)\d{20,22}/g,  // USPS
-        /\d{12,15}/g  // FedEx
-    ];
-
-    for (const pattern of trackingPatterns) {
-        const match = body.match(pattern);
-        if (match) {
-            tracking = match[0].replace(/tracking[:\s#]*/i, '').trim();
-            break;
-        }
-    }
-
-    // Extract item name from subject or body
-    let itemName = extractItemName(subject, body, category);
-    items.push({
-        name: itemName,
-        quantity: 1,
-        price: price
-    });
-
-    return { items, price, tracking };
-}
-
-/**
- * Extract item name from email
- */
-function extractItemName(subject, body, category) {
-    // Try to get item from subject
-    let itemName = subject
+function cleanSubject(subject) {
+    return subject
         .replace(/^(re:|fwd:|fw:)\s*/gi, '')
         .replace(/order\s*(confirmation|confirmed|#?\d+)/gi, '')
         .replace(/your\s+order/gi, '')
-        .replace(/has\s+shipped/gi, '')
-        .replace(/is\s+arriving/gi, '')
-        .replace(/receipt\s+for/gi, '')
-        .trim();
-
-    // If subject is too generic, try to extract from body
-    if (itemName.length < 5 || itemName.toLowerCase().includes('amazon')) {
-        // Look for item patterns in body
-        const itemPatterns = [
-            /(?:Item|Product|Description):\s*([^\n\r$]+)/i,
-            /(?:You ordered|Ordered):\s*([^\n\r$]+)/i,
-        ];
-
-        for (const pattern of itemPatterns) {
-            const match = body.match(pattern);
-            if (match && match[1].length > 3) {
-                itemName = match[1].trim().substring(0, 80);
-                break;
-            }
-        }
-    }
-
-    // Fallback to category-based generic name
-    if (itemName.length < 3) {
-        itemName = `${category} Order`;
-    }
-
-    // Clean and truncate
-    return itemName.substring(0, 100);
+        .trim()
+        .substring(0, 100) || 'Order';
 }
 
-/**
- * Determine order status from email content
- */
+function extractPrice(body) {
+    const matches = body.match(/\$\s*([\d,]+\.?\d*)/g) || [];
+    const prices = matches.map(m => parseFloat(m.replace(/[$,]/g, ''))).filter(p => p > 0 && p < 10000);
+    return prices.length > 0 ? Math.max(...prices) : 0;
+}
+
 function determineStatus(subject, body) {
     const content = (subject + ' ' + body).toLowerCase();
-
-    if (content.includes('delivered') || content.includes('has arrived')) {
-        return 'delivered';
-    }
-    if (content.includes('shipped') || content.includes('on its way') || content.includes('in transit')) {
-        return 'shipped';
-    }
-    if (content.includes('subscription') || content.includes('renewal') || content.includes('monthly') || content.includes('billing')) {
-        return 'subscription';
-    }
-    if (content.includes('processing') || content.includes('preparing')) {
-        return 'processing';
-    }
+    if (content.includes('delivered') || content.includes('has arrived')) return 'delivered';
+    if (content.includes('shipped') || content.includes('on its way') || content.includes('in transit')) return 'shipped';
+    if (content.includes('subscription') || content.includes('renewal') || content.includes('billing')) return 'subscription';
+    if (content.includes('processing') || content.includes('preparing')) return 'processing';
     return 'ordered';
 }
 
-/**
- * Check if email is subscription related
- */
-function isSubscriptionEmail(subject, body) {
-    const content = (subject + ' ' + body).toLowerCase();
-    return content.includes('subscription') ||
-           content.includes('monthly') ||
-           content.includes('renewal') ||
-           content.includes('recurring');
-}
-
-/**
- * Get email body text
- */
 function getEmailBody(payload) {
     let body = '';
-
     if (payload.body && payload.body.data) {
         body = decodeBase64(payload.body.data);
     } else if (payload.parts) {
@@ -660,7 +413,6 @@ function getEmailBody(payload) {
             if (part.mimeType === 'text/html' && part.body && part.body.data) {
                 body = stripHtml(decodeBase64(part.body.data));
             }
-            // Check nested parts
             if (part.parts) {
                 for (const subpart of part.parts) {
                     if (subpart.mimeType === 'text/plain' && subpart.body && subpart.body.data) {
@@ -671,13 +423,9 @@ function getEmailBody(payload) {
             }
         }
     }
-
     return body;
 }
 
-/**
- * Decode base64 email content
- */
 function decodeBase64(data) {
     try {
         return decodeURIComponent(escape(atob(data.replace(/-/g, '+').replace(/_/g, '/'))));
@@ -690,64 +438,38 @@ function decodeBase64(data) {
     }
 }
 
-/**
- * Strip HTML tags
- */
 function stripHtml(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     return doc.body.textContent || '';
 }
 
-/**
- * Get header value
- */
 function getHeader(headers, name) {
     const header = headers.find(h => h.name.toLowerCase() === name.toLowerCase());
     return header ? header.value : null;
 }
 
-/**
- * Extract sender name from email address
- */
 function extractSenderName(from) {
     const match = from.match(/^"?([^"<]+)"?\s*</);
-    if (match) {
-        return match[1].trim();
-    }
-    return from.split('@')[0];
+    return match ? match[1].trim() : from.split('@')[0];
 }
 
-/**
- * Extract merchant name
- */
-function extractMerchant(from, category) {
+function extractMerchant(from) {
     const emailMatch = from.match(/<([^>]+)>/) || from.match(/([^\s]+@[^\s]+)/);
     if (emailMatch) {
         const domain = emailMatch[1].split('@')[1];
         if (domain) {
-            return domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1);
+            const name = domain.split('.')[0];
+            return name.charAt(0).toUpperCase() + name.slice(1);
         }
     }
-    return category;
+    return 'Unknown';
 }
 
-/**
- * Format date for Gmail query
- */
-function formatDateForQuery(date) {
-    return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
-}
-
-/**
- * Remove duplicate orders
- */
 function deduplicateOrders(orders) {
     const seen = new Map();
     return orders.filter(order => {
-        const key = `${order.source}-${order.orderDate}-${order.subject.substring(0, 30)}`;
-        if (seen.has(key)) {
-            return false;
-        }
+        const key = order.id;
+        if (seen.has(key)) return false;
         seen.set(key, true);
         return true;
     });
@@ -755,9 +477,6 @@ function deduplicateOrders(orders) {
 
 // ============ UI Functions ============
 
-/**
- * Create category filter buttons
- */
 function createFilterButtons() {
     const categories = ['ALL', ...new Set(allOrders.map(o => o.source))];
 
@@ -780,18 +499,13 @@ function createFilterButtons() {
     });
 }
 
-/**
- * Create status filter buttons
- */
 function createStatusFilterButtons() {
     const statuses = ['ALL', 'delivered', 'shipped', 'ordered', 'subscription'];
 
     statusFilterButtons.innerHTML = statuses.map(status => {
         const config = STATUS_CONFIG[status] || { label: 'All', icon: '📋' };
         const count = status === 'ALL' ? allOrders.length : allOrders.filter(o => o.status === status).length;
-
         if (count === 0 && status !== 'ALL') return '';
-
         return `
             <button class="status-filter-btn ${status === 'ALL' ? 'active' : ''}" data-status="${status}">
                 ${status === 'ALL' ? '📋' : config.icon} ${status === 'ALL' ? 'All' : config.label}
@@ -809,23 +523,16 @@ function createStatusFilterButtons() {
     });
 }
 
-/**
- * Apply filters
- */
 function applyFilters() {
     filteredOrders = allOrders.filter(order => {
         const categoryMatch = activeFilter === 'ALL' || order.source === activeFilter;
         const statusMatch = activeStatusFilter === 'ALL' || order.status === activeStatusFilter;
         return categoryMatch && statusMatch;
     });
-
     displayOrders();
     updateSummary();
 }
 
-/**
- * Display orders
- */
 function displayOrders() {
     if (filteredOrders.length === 0) {
         ordersContainer.innerHTML = `
@@ -838,13 +545,10 @@ function displayOrders() {
         return;
     }
 
-    // Group by date
     const ordersByDate = {};
     filteredOrders.forEach(order => {
         const dateKey = order.orderDate;
-        if (!ordersByDate[dateKey]) {
-            ordersByDate[dateKey] = [];
-        }
+        if (!ordersByDate[dateKey]) ordersByDate[dateKey] = [];
         ordersByDate[dateKey].push(order);
     });
 
@@ -852,7 +556,6 @@ function displayOrders() {
     Object.keys(ordersByDate).sort((a, b) => new Date(b) - new Date(a)).forEach(dateKey => {
         const orders = ordersByDate[dateKey];
         const formattedDate = formatDateHeader(dateKey);
-
         html += `
             <div class="date-group">
                 <div class="date-header">${formattedDate}</div>
@@ -863,17 +566,11 @@ function displayOrders() {
 
     ordersContainer.innerHTML = html;
 
-    // Add click handlers
     ordersContainer.querySelectorAll('.order-card').forEach(card => {
-        card.addEventListener('click', () => {
-            card.classList.toggle('expanded');
-        });
+        card.addEventListener('click', () => card.classList.toggle('expanded'));
     });
 }
 
-/**
- * Format date header
- */
 function formatDateHeader(dateStr) {
     const date = new Date(dateStr + 'T12:00:00');
     const today = new Date();
@@ -882,13 +579,9 @@ function formatDateHeader(dateStr) {
 
     if (dateStr === today.toISOString().split('T')[0]) return 'Today';
     if (dateStr === yesterday.toISOString().split('T')[0]) return 'Yesterday';
-
     return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
-/**
- * Create order card HTML
- */
 function createOrderCard(order) {
     const statusConfig = STATUS_CONFIG[order.status] || STATUS_CONFIG.ordered;
     const categoryColor = CATEGORY_COLORS[order.source] || '#666';
@@ -916,7 +609,6 @@ function createOrderCard(order) {
             <div class="order-details">
                 <div class="order-subject">${escapeHtml(order.subject)}</div>
                 <div class="order-from">From: ${escapeHtml(order.from)}</div>
-                ${order.trackingNumber ? `<div class="tracking-info">Tracking: ${order.trackingNumber}</div>` : ''}
                 ${order.snippet ? `<div class="order-snippet">${escapeHtml(order.snippet.substring(0, 200))}...</div>` : ''}
                 ${order.isSubscription ? '<div class="subscription-badge">Subscription</div>' : ''}
             </div>
@@ -924,9 +616,6 @@ function createOrderCard(order) {
     `;
 }
 
-/**
- * Get category icon
- */
 function getCategoryIcon(source) {
     const icons = {
         'AMAZON': '📦',
@@ -935,16 +624,13 @@ function getCategoryIcon(source) {
         'AI': '🤖',
         'DIVIDED WE STAND': '👕',
         'BMW': '🚗',
-        'QUALITY WEB TIME': '🌐',
+        'QUALITY-WEB-TIME': '🌐',
         'SUBSCRIPTIONS': '↻',
         'OTHER': '🛍️'
     };
     return icons[source] || '📦';
 }
 
-/**
- * Update summary stats
- */
 function updateSummary() {
     const totalSpent = filteredOrders.reduce((sum, order) => sum + (order.totalPrice || 0), 0);
     const pendingCount = filteredOrders.filter(o => ['ordered', 'processing', 'shipped'].includes(o.status)).length;
@@ -954,9 +640,6 @@ function updateSummary() {
     pendingOrdersEl.textContent = pendingCount;
 }
 
-/**
- * Update last updated time
- */
 function updateLastUpdated() {
     const now = new Date();
     lastUpdatedEl.textContent = now.toLocaleDateString('en-US', {
@@ -964,9 +647,6 @@ function updateLastUpdated() {
     });
 }
 
-/**
- * Escape HTML
- */
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -977,7 +657,7 @@ function escapeHtml(text) {
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('service-worker.js')
-            .then(reg => console.log('Service Worker registered'))
-            .catch(err => console.log('SW registration failed:', err));
+            .then(reg => console.log('SW registered'))
+            .catch(err => console.log('SW failed:', err));
     });
 }
