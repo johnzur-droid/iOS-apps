@@ -87,7 +87,7 @@
     </style>
 </head>
 <body>
-    <h1>Order Tracker v60</h1>
+    <h1>Order Tracker v61</h1>
     <div id="status">Loading...</div>
     <button id="authBtn" class="auth-btn" disabled>Loading...</button>
     <div id="log"></div>
@@ -141,16 +141,16 @@
             }
             gapi.load('client', async function() {
                 try {
+                    // Don't use API key - OAuth token is sufficient for Gmail
                     await gapi.client.init({
-                        apiKey: API_KEY,
                         discoveryDocs: [DISCOVERY_DOC]
                     });
                     gapiReady = true;
                     log('GAPI client initialized', 'success');
                     checkReady();
                 } catch (e) {
-                    log('GAPI init error: ' + e.message, 'error');
-                    setStatus('Error: ' + e.message);
+                    log('GAPI init error: ' + (e.message || e.error || JSON.stringify(e)), 'error');
+                    setStatus('Error: ' + (e.message || e.error || JSON.stringify(e)));
                 }
             });
         }
