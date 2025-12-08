@@ -1,6 +1,6 @@
 // Google Calendar API Configuration
 const CLIENT_ID = '457025763296-osgitgjro33vo2tcc5d2d596isroij5v.apps.googleusercontent.com';
-const API_KEY = 'AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco';
+// No API key needed - OAuth token is sufficient
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest';
 const SCOPES = 'https://www.googleapis.com/auth/calendar.readonly';
 
@@ -35,20 +35,21 @@ retryBtn.addEventListener('click', () => {
 function gapiLoaded() {
     if (typeof gapi === 'undefined') {
         console.error('Google API library failed to load');
-        setTimeout(gapiLoaded, 1000); // Retry after 1 second
+        setTimeout(gapiLoaded, 1000);
         return;
     }
     gapi.load('client', async () => {
         try {
+            // No API key needed - OAuth token handles auth
             await gapi.client.init({
-                apiKey: API_KEY,
                 discoveryDocs: [DISCOVERY_DOC],
             });
             gapiInited = true;
+            console.log('GAPI initialized successfully');
             maybeEnableButtons();
         } catch (error) {
             console.error('Error initializing GAPI client:', error);
-            showError('Failed to initialize Google API. Please refresh the page.');
+            showError('Failed to initialize Google API: ' + (error.message || JSON.stringify(error)));
         }
     });
 }
