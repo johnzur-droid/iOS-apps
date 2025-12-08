@@ -7,17 +7,22 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Orders">
     <meta name="theme-color" content="#1a1a2e">
-    <title>Order Tracker - Last 60 Days</title>
+    <title>Order Tracker</title>
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=62">
+    <link rel="stylesheet" href="styles.css?v=63">
 </head>
 <body>
     <div class="app-container">
-        <!-- Header -->
+        <!-- Header with Time Selector -->
         <header class="app-header">
             <h1>My Orders</h1>
-            <span class="subtitle">Last 60 Days</span>
+            <div class="time-selector">
+                <button class="time-btn" data-days="30">30d</button>
+                <button class="time-btn active" data-days="90">90d</button>
+                <button class="time-btn" data-days="180">6mo</button>
+                <button class="time-btn" data-days="365">1yr</button>
+            </div>
         </header>
 
         <!-- Auth Section -->
@@ -25,47 +30,44 @@
             <div class="auth-content">
                 <div class="auth-icon">📧</div>
                 <h2>Connect Gmail</h2>
-                <p>Sign in with Google to scan your email for order confirmations, shipping updates, and subscriptions.</p>
+                <p>Sign in to scan your emails for orders, shipments, and deliveries.</p>
                 <button id="authorizeBtn" class="auth-btn">Connect Gmail Account</button>
-                <p class="auth-note">We only read emails to find your orders. Your data stays on your device.</p>
             </div>
         </div>
 
         <!-- Loading Section -->
         <div id="loadingSection" class="loading-section hidden">
             <div class="spinner"></div>
-            <p id="scanProgress">Scanning your emails...</p>
-            <p class="loading-note">Checking STORE, PAYPAL, AI, AMAZON, and more...</p>
+            <p id="scanProgress">Connecting...</p>
+            <p class="loading-note" id="loadingNote">Scanning your emails...</p>
         </div>
 
         <!-- Orders Section -->
         <div id="ordersSection" class="orders-section hidden">
-            <!-- Summary Stats -->
-            <div id="summaryStats" class="summary-stats">
-                <div class="stat-card">
-                    <div class="stat-value" id="totalSpent">$0.00</div>
-                    <div class="stat-label">Total Spent</div>
+            <!-- Summary Cards - Tappable -->
+            <div class="summary-cards">
+                <div class="summary-card" data-filter="all" id="cardSpent">
+                    <div class="card-value" id="totalSpent">$0</div>
+                    <div class="card-label">Total Spent</div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="totalOrders">0</div>
-                    <div class="stat-label">Orders</div>
+                <div class="summary-card" data-filter="all" id="cardOrders">
+                    <div class="card-value" id="totalOrders">0</div>
+                    <div class="card-label">Orders</div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="pendingOrders">0</div>
-                    <div class="stat-label">In Transit</div>
+                <div class="summary-card" data-filter="delivered" id="cardDelivered">
+                    <div class="card-value" id="deliveredCount">0</div>
+                    <div class="card-label">Delivered</div>
+                </div>
+                <div class="summary-card active" data-filter="pending" id="cardPending">
+                    <div class="card-value" id="pendingCount">0</div>
+                    <div class="card-label">In Transit</div>
                 </div>
             </div>
 
-            <!-- Category Filters -->
-            <div class="filter-section">
-                <div class="filter-label">Categories</div>
-                <div id="filterButtons" class="filter-buttons"></div>
-            </div>
-
-            <!-- Status Filters -->
-            <div class="filter-section status-section">
-                <div class="filter-label">Status</div>
-                <div id="statusFilterButtons" class="status-filter-buttons"></div>
+            <!-- Active Filter Indicator -->
+            <div class="filter-indicator">
+                <span id="filterLabel">Showing: In Transit</span>
+                <button id="clearFilter" class="clear-filter hidden">Show All</button>
             </div>
 
             <!-- Orders List -->
@@ -91,6 +93,6 @@
     <!-- Google APIs -->
     <script src="https://apis.google.com/js/api.js" async defer onload="gapiLoaded()"></script>
     <script src="https://accounts.google.com/gsi/client" async defer onload="gisLoaded()"></script>
-    <script src="app.js?v=62"></script>
+    <script src="app.js?v=63"></script>
 </body>
 </html>

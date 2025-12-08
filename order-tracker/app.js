@@ -1,10 +1,7 @@
-// Order Tracker - Gmail API Integration v62
-// Scans Gmail for order confirmations from the last 60 days
+// Order Tracker v63 - Smart Order Correlation
+// Correlates emails from stores, PayPal, and shippers into unified orders
 
-// Google API Configuration
-// Using NEW Gmail Client ID (not the calendar one)
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
-// No API key needed - OAuth token is sufficient for Gmail API
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
 
@@ -12,89 +9,107 @@ let tokenClient;
 let gapiInited = false;
 let gisInited = false;
 
+// Configuration
+let selectedDays = 90;
+const LABEL_NAMES = ['STORE', 'PAYPAL', 'AI', 'DIVIDED WE STAND', 'BMW', 'QUALITY-WEB-TIME'];
+
+// Shipping carriers for tracking
+const CARRIERS = {
+    'ups': { pattern: /\b1Z[A-Z0-9]{16}\b/i, name: 'UPS' },
+    'usps': { pattern: /\b(94|93|92|94|95)[0-9]{20}\b/, name: 'USPS' },
+    'fedex': { pattern: /\b[0-9]{12,22}\b/, name: 'FedEx' }
+};
+
+// Keywords to identify order-related emails
+const ORDER_KEYWORDS = [
+    'order confirm', 'order received', 'order placed', 'thank you for your order',
+    'purchase confirm', 'receipt for your', 'payment confirm', 'transaction',
+    'your order', 'order #', 'order number', 'invoice'
+];
+
+const SHIPPING_KEYWORDS = [
+    'shipped', 'shipping confirm', 'on its way', 'in transit', 'out for delivery',
+    'tracking number', 'track your', 'shipment', 'delivery'
+];
+
+const DELIVERY_KEYWORDS = [
+    'delivered', 'has been delivered', 'was delivered', 'left at', 'signed for'
+];
+
+// Keywords to EXCLUDE - not orders
+const EXCLUDE_KEYWORDS = [
+    'password reset', 'verify your email', 'sign in', 'security alert',
+    'update from', 'newsletter', 'weekly digest', 'unsubscribe',
+    'account update', 'privacy policy', 'terms of service',
+    'survey', 'feedback', 'how was your', 'rate your'
+];
+
 // State
 let allOrders = [];
 let filteredOrders = [];
-let activeFilter = 'ALL';
-let activeStatusFilter = 'ALL';
+let currentFilter = 'pending';
 
-// Gmail labels to search (exact names as they appear in Gmail)
-const LABEL_NAMES = ['STORE', 'PAYPAL', 'AI', 'DIVIDED WE STAND', 'BMW', 'QUALITY-WEB-TIME'];
-
-// Additional keyword searches
-const KEYWORD_SEARCHES = {
-    'AMAZON': 'from:amazon',
-    'SUBSCRIPTIONS': 'subject:(subscription OR renewal OR billing OR receipt OR invoice OR "monthly charge")'
-};
-
-// Category colors
-const CATEGORY_COLORS = {
-    'AMAZON': '#FF9900',
-    'PAYPAL': '#003087',
-    'STORE': '#4CAF50',
-    'AI': '#9C27B0',
-    'DIVIDED WE STAND': '#E91E63',
-    'BMW': '#1C69D4',
-    'QUALITY-WEB-TIME': '#00BCD4',
-    'SUBSCRIPTIONS': '#FF5722',
-    'OTHER': '#607D8B'
-};
-
-// Status config
-const STATUS_CONFIG = {
-    'delivered': { label: 'Delivered', color: '#4CAF50', icon: '✓' },
-    'shipped': { label: 'Shipped', color: '#2196F3', icon: '📦' },
-    'processing': { label: 'Processing', color: '#FF9800', icon: '⏳' },
-    'ordered': { label: 'Ordered', color: '#9E9E9E', icon: '○' },
-    'subscription': { label: 'Active', color: '#9C27B0', icon: '↻' }
-};
-
-// DOM elements
+// DOM Elements
 const authSection = document.getElementById('authSection');
 const loadingSection = document.getElementById('loadingSection');
 const ordersSection = document.getElementById('ordersSection');
 const errorSection = document.getElementById('errorSection');
 const ordersContainer = document.getElementById('ordersContainer');
-const filterButtons = document.getElementById('filterButtons');
-const statusFilterButtons = document.getElementById('statusFilterButtons');
 const errorMessage = document.getElementById('errorMessage');
 const authorizeBtn = document.getElementById('authorizeBtn');
 const refreshBtn = document.getElementById('refreshBtn');
 const retryBtn = document.getElementById('retryBtn');
-const totalSpentEl = document.getElementById('totalSpent');
-const totalOrdersEl = document.getElementById('totalOrders');
-const pendingOrdersEl = document.getElementById('pendingOrders');
-const lastUpdatedEl = document.getElementById('lastUpdated');
 const scanProgressEl = document.getElementById('scanProgress');
+const loadingNoteEl = document.getElementById('loadingNote');
+const filterLabel = document.getElementById('filterLabel');
+const clearFilterBtn = document.getElementById('clearFilter');
 
-// Event listeners
+// Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v5 loaded');
+    console.log('Order Tracker v63 loaded');
+    setupEventListeners();
 });
 
-if (authorizeBtn) authorizeBtn.addEventListener('click', handleAuthClick);
-if (refreshBtn) refreshBtn.addEventListener('click', () => scanGmailForOrders());
-if (retryBtn) retryBtn.addEventListener('click', () => showSection('auth'));
+function setupEventListeners() {
+    if (authorizeBtn) authorizeBtn.addEventListener('click', handleAuthClick);
+    if (refreshBtn) refreshBtn.addEventListener('click', () => scanEmails());
+    if (retryBtn) retryBtn.addEventListener('click', () => showSection('auth'));
+    if (clearFilterBtn) clearFilterBtn.addEventListener('click', () => setFilter('all'));
+
+    // Time selector buttons
+    document.querySelectorAll('.time-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            selectedDays = parseInt(btn.dataset.days);
+            if (gapi.client.getToken()) {
+                scanEmails();
+            }
+        });
+    });
+
+    // Summary card clicks
+    document.querySelectorAll('.summary-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const filter = card.dataset.filter;
+            setFilter(filter);
+        });
+    });
+}
 
 function gapiLoaded() {
     if (typeof gapi === 'undefined') {
-        console.log('gapi undefined, retrying...');
         setTimeout(gapiLoaded, 1000);
         return;
     }
-    console.log('GAPI script loaded');
     gapi.load('client', async () => {
         try {
-            // No API key needed - OAuth token handles auth
-            await gapi.client.init({
-                discoveryDocs: [DISCOVERY_DOC],
-            });
+            await gapi.client.init({ discoveryDocs: [DISCOVERY_DOC] });
             gapiInited = true;
-            console.log('GAPI client initialized');
             maybeEnableButtons();
         } catch (error) {
             console.error('GAPI init error:', error);
-            showError('Failed to initialize Google API: ' + (error.message || error.error || JSON.stringify(error)));
+            showError('Failed to initialize: ' + (error.message || JSON.stringify(error)));
         }
     });
 }
@@ -108,7 +123,7 @@ function gisLoaded() {
         tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: CLIENT_ID,
             scope: SCOPES,
-            callback: '',
+            callback: handleAuthCallback
         });
         gisInited = true;
         maybeEnableButtons();
@@ -123,7 +138,7 @@ function maybeEnableButtons() {
         const token = gapi.client.getToken();
         if (token) {
             showSection('loading');
-            scanGmailForOrders();
+            scanEmails();
         } else {
             showSection('auth');
         }
@@ -135,146 +150,95 @@ function handleAuthClick() {
         showError('Not ready. Please refresh.');
         return;
     }
-
-    tokenClient.callback = async (resp) => {
-        if (resp.error) {
-            showError('Auth error: ' + resp.error);
-            return;
-        }
-        localStorage.setItem('orders_authorized', 'true');
-        showSection('loading');
-        await scanGmailForOrders();
-    };
-
     const hasAuth = localStorage.getItem('orders_authorized');
     tokenClient.requestAccessToken({ prompt: hasAuth ? '' : 'select_account' });
 }
 
-function showSection(section) {
-    authSection.classList.add('hidden');
-    loadingSection.classList.add('hidden');
-    ordersSection.classList.add('hidden');
-    errorSection.classList.add('hidden');
+function handleAuthCallback(resp) {
+    if (resp.error) {
+        showError('Auth failed: ' + resp.error);
+        return;
+    }
+    localStorage.setItem('orders_authorized', 'true');
+    showSection('loading');
+    scanEmails();
+}
 
+function showSection(section) {
+    [authSection, loadingSection, ordersSection, errorSection].forEach(s => s?.classList.add('hidden'));
     switch (section) {
-        case 'auth': authSection.classList.remove('hidden'); break;
-        case 'loading': loadingSection.classList.remove('hidden'); break;
-        case 'orders': ordersSection.classList.remove('hidden'); break;
-        case 'error': errorSection.classList.remove('hidden'); break;
+        case 'auth': authSection?.classList.remove('hidden'); break;
+        case 'loading': loadingSection?.classList.remove('hidden'); break;
+        case 'orders': ordersSection?.classList.remove('hidden'); break;
+        case 'error': errorSection?.classList.remove('hidden'); break;
     }
 }
 
 function showError(message) {
-    errorMessage.textContent = message;
+    if (errorMessage) errorMessage.textContent = message;
     showSection('error');
 }
 
-function updateProgress(message) {
+function updateProgress(message, note = '') {
     if (scanProgressEl) scanProgressEl.textContent = message;
-    console.log('Progress:', message);
+    if (loadingNoteEl) loadingNoteEl.textContent = note;
 }
 
-// Debug output to screen (so user can see without developer tools)
-const debugOutputEl = document.getElementById('debugOutput');
-function debugLog(message, type = 'info') {
-    console.log(message);
-    if (debugOutputEl) {
-        const line = document.createElement('div');
-        line.className = `debug-line ${type}`;
-        line.textContent = message;
-        debugOutputEl.appendChild(line);
-        debugOutputEl.scrollTop = debugOutputEl.scrollHeight;
-    }
-}
+// ============ MAIN SCAN & CORRELATION ============
 
-function clearDebug() {
-    if (debugOutputEl) debugOutputEl.innerHTML = '';
-}
-
-/**
- * MAIN SCAN FUNCTION
- */
-async function scanGmailForOrders() {
+async function scanEmails() {
     try {
         showSection('loading');
-        clearDebug();
-        allOrders = [];
+        updateProgress('Connecting to Gmail...', '');
 
-        // Step 1: Get all Gmail labels
-        updateProgress('Fetching Gmail labels...');
-        debugLog('Fetching all Gmail labels...', 'info');
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - selectedDays);
+        const afterDate = cutoffDate.toISOString().split('T')[0].replace(/-/g, '/');
 
-        const labelsResponse = await gapi.client.gmail.users.labels.list({ userId: 'me' });
-        const allLabels = labelsResponse.result.labels || [];
+        // Collect all raw emails
+        const rawEmails = [];
 
-        debugLog(`Found ${allLabels.length} total labels in Gmail`, 'info');
+        // Search labels
+        updateProgress('Fetching labels...', '');
+        const labelsResp = await gapi.client.gmail.users.labels.list({ userId: 'me' });
+        const allLabels = labelsResp.result.labels || [];
 
-        // Show all user labels (not system ones)
-        const userLabels = allLabels.filter(l => l.type === 'user');
-        debugLog(`User labels: ${userLabels.map(l => l.name).join(', ')}`, 'info');
-
-        // Step 2: Find matching labels (case-insensitive)
-        const labelMatches = {};
-        for (const targetLabel of LABEL_NAMES) {
-            const found = allLabels.find(l =>
-                l.name.toUpperCase() === targetLabel.toUpperCase() ||
-                l.name.toUpperCase().replace(/[\s-]/g, '') === targetLabel.toUpperCase().replace(/[\s-]/g, '')
-            );
-            if (found) {
-                labelMatches[targetLabel] = found;
-                debugLog(`✓ FOUND: "${targetLabel}" => ${found.name} (${found.id})`, 'found');
-            } else {
-                debugLog(`✗ NOT FOUND: "${targetLabel}"`, 'not-found');
+        for (const labelName of LABEL_NAMES) {
+            const label = allLabels.find(l => l.name.toUpperCase() === labelName.toUpperCase());
+            if (label) {
+                updateProgress(`Scanning ${labelName}...`, `Found label`);
+                const emails = await fetchEmailsWithQuery(`label:${labelName} after:${afterDate}`);
+                rawEmails.push(...emails.map(e => ({ ...e, source: labelName })));
             }
         }
 
-        // Calculate date 60 days ago
-        const sixtyDaysAgo = new Date();
-        sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
-        const afterDate = `${sixtyDaysAgo.getFullYear()}/${sixtyDaysAgo.getMonth() + 1}/${sixtyDaysAgo.getDate()}`;
+        // Search for Amazon orders
+        updateProgress('Scanning Amazon...', '');
+        const amazonEmails = await fetchEmailsWithQuery(`from:amazon after:${afterDate}`);
+        rawEmails.push(...amazonEmails.map(e => ({ ...e, source: 'AMAZON' })));
 
-        // Step 3: Search each label with pagination
-        const totalSearches = Object.keys(labelMatches).length + Object.keys(KEYWORD_SEARCHES).length;
-        let searchNum = 0;
+        // Search for shipping notifications
+        updateProgress('Scanning shipping updates...', '');
+        const shippingEmails = await fetchEmailsWithQuery(
+            `(from:ups OR from:usps OR from:fedex OR subject:shipped OR subject:tracking) after:${afterDate}`
+        );
+        rawEmails.push(...shippingEmails.map(e => ({ ...e, source: 'SHIPPING' })));
 
-        for (const [labelName, labelInfo] of Object.entries(labelMatches)) {
-            searchNum++;
-            updateProgress(`Searching ${labelName} (${searchNum}/${totalSearches})...`);
+        updateProgress('Processing emails...', `${rawEmails.length} emails found`);
 
-            const emails = await getAllEmailsWithLabel(labelInfo.id, afterDate);
-            debugLog(`${labelName}: ${emails.length} emails found`, emails.length > 0 ? 'found' : 'not-found');
+        // Parse all emails
+        const parsedEmails = rawEmails.map(parseEmail).filter(e => e !== null);
 
-            for (const email of emails) {
-                const order = emailToOrder(email, labelName);
-                if (order) allOrders.push(order);
-            }
-        }
+        updateProgress('Correlating orders...', `${parsedEmails.length} relevant emails`);
 
-        // Step 4: Keyword searches (Amazon, Subscriptions)
-        for (const [category, query] of Object.entries(KEYWORD_SEARCHES)) {
-            searchNum++;
-            updateProgress(`Searching ${category} (${searchNum}/${totalSearches})...`);
+        // Correlate into orders
+        allOrders = correlateOrders(parsedEmails);
 
-            const emails = await searchEmailsByQuery(`${query} after:${afterDate}`);
-            debugLog(`${category}: ${emails.length} emails found`, emails.length > 0 ? 'found' : 'not-found');
+        updateProgress('Finalizing...', `${allOrders.length} orders found`);
 
-            for (const email of emails) {
-                // Skip if already found
-                if (allOrders.some(o => o.id === email.id)) continue;
-                const order = emailToOrder(email, category);
-                if (order) allOrders.push(order);
-            }
-        }
-
-        // Sort and dedupe
-        allOrders.sort((a, b) => new Date(b.orderDate) - new Date(a.orderDate));
-        allOrders = deduplicateOrders(allOrders);
-
-        debugLog(`=== TOTAL: ${allOrders.length} orders ===`, 'info');
-
-        createFilterButtons();
-        createStatusFilterButtons();
-        applyFilters();
+        // Update UI
+        updateSummary();
+        setFilter('pending');
         updateLastUpdated();
         showSection('orders');
 
@@ -284,64 +248,12 @@ async function scanGmailForOrders() {
     }
 }
 
-/**
- * Get ALL emails with a specific label (handles pagination)
- */
-async function getAllEmailsWithLabel(labelId, afterDate) {
-    const emails = [];
-    let pageToken = null;
-    let page = 0;
-
-    do {
-        page++;
-        console.log(`  Fetching page ${page} for label ${labelId}...`);
-
-        const params = {
-            userId: 'me',
-            labelIds: [labelId],
-            q: `after:${afterDate}`,
-            maxResults: 100
-        };
-        if (pageToken) params.pageToken = pageToken;
-
-        const response = await gapi.client.gmail.users.messages.list(params);
-        const messages = response.result.messages || [];
-
-        console.log(`  Page ${page}: ${messages.length} messages`);
-
-        // Fetch full message details
-        for (const msg of messages) {
-            try {
-                const full = await gapi.client.gmail.users.messages.get({
-                    userId: 'me',
-                    id: msg.id,
-                    format: 'full'
-                });
-                emails.push(full.result);
-            } catch (e) {
-                console.error('Error fetching message:', e);
-            }
-        }
-
-        pageToken = response.result.nextPageToken;
-    } while (pageToken);
-
-    return emails;
-}
-
-/**
- * Search emails by query string (handles pagination)
- */
-async function searchEmailsByQuery(query) {
+async function fetchEmailsWithQuery(query) {
     const emails = [];
     let pageToken = null;
 
     do {
-        const params = {
-            userId: 'me',
-            q: query,
-            maxResults: 100
-        };
+        const params = { userId: 'me', q: query, maxResults: 100 };
         if (pageToken) params.pageToken = pageToken;
 
         const response = await gapi.client.gmail.users.messages.list(params);
@@ -361,90 +273,326 @@ async function searchEmailsByQuery(query) {
         }
 
         pageToken = response.result.nextPageToken;
-    } while (pageToken);
+    } while (pageToken && emails.length < 500); // Cap at 500 emails
 
     return emails;
 }
 
-/**
- * Convert email to order object - MINIMAL FILTERING
- */
-function emailToOrder(message, category) {
-    const headers = message.payload.headers;
-    const subject = getHeader(headers, 'Subject') || 'No Subject';
+function parseEmail(message) {
+    const headers = message.payload?.headers || [];
+    const subject = getHeader(headers, 'Subject') || '';
     const from = getHeader(headers, 'From') || '';
     const date = getHeader(headers, 'Date') || '';
+    const body = getEmailBody(message.payload);
+    const fullText = (subject + ' ' + body).toLowerCase();
 
-    // Only exclude obvious non-orders
-    const subjectLower = subject.toLowerCase();
-    const skipPatterns = ['password reset', 'verify your email', 'sign in', 'security alert'];
-    if (skipPatterns.some(p => subjectLower.includes(p))) {
+    // Skip excluded emails
+    if (EXCLUDE_KEYWORDS.some(kw => fullText.includes(kw.toLowerCase()))) {
         return null;
     }
 
-    const body = getEmailBody(message.payload);
-    const price = extractPrice(body);
-    const status = determineStatus(subject, body);
+    // Determine email type
+    let type = 'unknown';
+    if (DELIVERY_KEYWORDS.some(kw => fullText.includes(kw.toLowerCase()))) {
+        type = 'delivery';
+    } else if (SHIPPING_KEYWORDS.some(kw => fullText.includes(kw.toLowerCase()))) {
+        type = 'shipping';
+    } else if (ORDER_KEYWORDS.some(kw => fullText.includes(kw.toLowerCase()))) {
+        type = 'order';
+    } else if (from.toLowerCase().includes('paypal')) {
+        type = 'payment';
+    } else {
+        // Not order-related
+        return null;
+    }
+
+    // Extract data
+    const amount = extractAmount(body);
+    const orderNumber = extractOrderNumber(subject + ' ' + body);
+    const trackingInfo = extractTracking(body);
+    const merchant = extractMerchant(from, subject, body);
 
     return {
         id: message.id,
-        source: category,
-        orderDate: new Date(date).toISOString().split('T')[0],
-        items: [{ name: cleanSubject(subject), quantity: 1, price: price }],
-        totalPrice: price,
-        status: status,
-        subject: subject,
-        from: extractSenderName(from),
-        merchant: extractMerchant(from),
-        trackingNumber: null,
-        isSubscription: category === 'SUBSCRIPTIONS' || subjectLower.includes('subscription'),
-        snippet: message.snippet
+        type,
+        source: message.source,
+        subject,
+        from,
+        date: new Date(date),
+        amount,
+        orderNumber,
+        tracking: trackingInfo,
+        merchant,
+        snippet: message.snippet,
+        body: body.substring(0, 2000) // Limit body size
     };
+}
+
+function correlateOrders(emails) {
+    const orders = [];
+    const used = new Set();
+
+    // Sort by date (oldest first for correlation)
+    emails.sort((a, b) => a.date - b.date);
+
+    // First pass: Group by order number
+    const byOrderNumber = {};
+    emails.forEach(email => {
+        if (email.orderNumber && email.orderNumber.length > 3) {
+            if (!byOrderNumber[email.orderNumber]) {
+                byOrderNumber[email.orderNumber] = [];
+            }
+            byOrderNumber[email.orderNumber].push(email);
+        }
+    });
+
+    // Create orders from order number groups
+    for (const [orderNum, emailGroup] of Object.entries(byOrderNumber)) {
+        if (emailGroup.length > 0) {
+            const order = createOrderFromEmails(emailGroup, orderNum);
+            orders.push(order);
+            emailGroup.forEach(e => used.add(e.id));
+        }
+    }
+
+    // Second pass: Match remaining by amount + merchant + date proximity
+    const remaining = emails.filter(e => !used.has(e.id));
+
+    for (const email of remaining) {
+        if (used.has(email.id)) continue;
+        if (email.type === 'order' || email.type === 'payment') {
+            // Find related emails
+            const related = [email];
+            used.add(email.id);
+
+            // Look for shipping/delivery emails with similar merchant or tracking
+            for (const other of remaining) {
+                if (used.has(other.id)) continue;
+                if (isRelated(email, other)) {
+                    related.push(other);
+                    used.add(other.id);
+                }
+            }
+
+            const order = createOrderFromEmails(related);
+            orders.push(order);
+        }
+    }
+
+    // Third pass: Standalone shipping/delivery (no matching order)
+    for (const email of remaining) {
+        if (used.has(email.id)) continue;
+        if (email.type === 'shipping' || email.type === 'delivery') {
+            const order = createOrderFromEmails([email]);
+            orders.push(order);
+            used.add(email.id);
+        }
+    }
+
+    // Sort by date (newest first)
+    orders.sort((a, b) => b.orderDate - a.orderDate);
+
+    return orders;
+}
+
+function isRelated(email1, email2) {
+    // Same merchant
+    if (email1.merchant && email2.merchant &&
+        email1.merchant.toLowerCase() === email2.merchant.toLowerCase()) {
+        // Within 14 days
+        const daysDiff = Math.abs(email1.date - email2.date) / (1000 * 60 * 60 * 24);
+        if (daysDiff <= 14) return true;
+    }
+
+    // Similar amount (within $1)
+    if (email1.amount > 0 && email2.amount > 0) {
+        if (Math.abs(email1.amount - email2.amount) < 1) {
+            const daysDiff = Math.abs(email1.date - email2.date) / (1000 * 60 * 60 * 24);
+            if (daysDiff <= 7) return true;
+        }
+    }
+
+    return false;
+}
+
+function createOrderFromEmails(emails, orderNumber = null) {
+    // Sort by date
+    emails.sort((a, b) => a.date - b.date);
+
+    const orderEmail = emails.find(e => e.type === 'order') || emails[0];
+    const paymentEmail = emails.find(e => e.type === 'payment');
+    const shippingEmail = emails.find(e => e.type === 'shipping');
+    const deliveryEmail = emails.find(e => e.type === 'delivery');
+
+    // Determine status
+    let status = 'ordered';
+    if (deliveryEmail) {
+        status = 'delivered';
+    } else if (shippingEmail) {
+        status = 'shipped';
+    }
+
+    // Get best amount
+    const amount = orderEmail?.amount || paymentEmail?.amount || shippingEmail?.amount || 0;
+
+    // Get tracking
+    const tracking = shippingEmail?.tracking || deliveryEmail?.tracking || null;
+
+    // Get merchant
+    const merchant = orderEmail?.merchant || paymentEmail?.merchant ||
+                     shippingEmail?.merchant || 'Unknown';
+
+    // Payment method
+    const paymentMethod = paymentEmail ? 'PayPal' : (orderEmail?.source === 'PAYPAL' ? 'PayPal' : 'Direct');
+
+    return {
+        id: orderEmail?.id || emails[0].id,
+        orderNumber: orderNumber || orderEmail?.orderNumber || null,
+        merchant,
+        amount,
+        paymentMethod,
+        status,
+        orderDate: orderEmail?.date || emails[0].date,
+        shipDate: shippingEmail?.date || null,
+        deliveryDate: deliveryEmail?.date || null,
+        tracking,
+        itemName: cleanSubject(orderEmail?.subject || emails[0].subject),
+        emails: emails.map(e => ({
+            type: e.type,
+            date: e.date,
+            subject: e.subject,
+            snippet: e.snippet
+        })),
+        source: orderEmail?.source || emails[0].source
+    };
+}
+
+// ============ EXTRACTION HELPERS ============
+
+function extractAmount(text) {
+    const patterns = [
+        /(?:total|amount|charge|paid|price)[:\s]*\$?([\d,]+\.?\d*)/gi,
+        /\$\s*([\d,]+\.\d{2})/g
+    ];
+
+    let amounts = [];
+    for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+            const amt = parseFloat(match[1].replace(/,/g, ''));
+            if (amt > 0 && amt < 50000) {
+                amounts.push(amt);
+            }
+        }
+    }
+
+    // Return the largest reasonable amount (likely the total)
+    return amounts.length > 0 ? Math.max(...amounts) : 0;
+}
+
+function extractOrderNumber(text) {
+    const patterns = [
+        /order\s*(?:#|number|num|no\.?)?[:\s]*([A-Z0-9-]{5,20})/gi,
+        /(?:#|number|no\.?)[:\s]*([A-Z0-9-]{5,20})/gi,
+        /([0-9]{3}-[0-9]{7}-[0-9]{7})/g // Amazon format
+    ];
+
+    for (const pattern of patterns) {
+        const match = pattern.exec(text);
+        if (match) return match[1];
+    }
+    return null;
+}
+
+function extractTracking(text) {
+    for (const [carrier, config] of Object.entries(CARRIERS)) {
+        const match = config.pattern.exec(text);
+        if (match) {
+            return {
+                carrier: config.name,
+                number: match[0]
+            };
+        }
+    }
+    return null;
+}
+
+function extractMerchant(from, subject, body) {
+    // Try to get from email domain
+    const emailMatch = from.match(/@([^.>]+)/);
+    if (emailMatch) {
+        const domain = emailMatch[1].toLowerCase();
+        // Common mappings
+        const mappings = {
+            'amazon': 'Amazon',
+            'paypal': 'PayPal',
+            'apple': 'Apple',
+            'google': 'Google',
+            'microsoft': 'Microsoft',
+            'bestbuy': 'Best Buy',
+            'walmart': 'Walmart',
+            'target': 'Target',
+            'ebay': 'eBay',
+            'etsy': 'Etsy',
+            'nike': 'Nike',
+            'adidas': 'Adidas'
+        };
+
+        for (const [key, value] of Object.entries(mappings)) {
+            if (domain.includes(key)) return value;
+        }
+
+        // Capitalize first letter
+        return domain.charAt(0).toUpperCase() + domain.slice(1);
+    }
+
+    // Try to get from "From" name
+    const nameMatch = from.match(/^"?([^"<]+)"?\s*</);
+    if (nameMatch) return nameMatch[1].trim();
+
+    return 'Unknown';
 }
 
 function cleanSubject(subject) {
     return subject
         .replace(/^(re:|fwd:|fw:)\s*/gi, '')
-        .replace(/order\s*(confirmation|confirmed|#?\d+)/gi, '')
-        .replace(/your\s+order/gi, '')
+        .replace(/order\s*(confirmation|confirmed|#[A-Z0-9-]+)/gi, '')
+        .replace(/your\s+(order|purchase|receipt)/gi, '')
+        .replace(/thank\s+you\s+for\s+your\s+(order|purchase)/gi, '')
+        .replace(/^\s*[-:]\s*/, '')
         .trim()
-        .substring(0, 100) || 'Order';
+        .substring(0, 80) || 'Order';
 }
 
-function extractPrice(body) {
-    const matches = body.match(/\$\s*([\d,]+\.?\d*)/g) || [];
-    const prices = matches.map(m => parseFloat(m.replace(/[$,]/g, ''))).filter(p => p > 0 && p < 10000);
-    return prices.length > 0 ? Math.max(...prices) : 0;
-}
-
-function determineStatus(subject, body) {
-    const content = (subject + ' ' + body).toLowerCase();
-    if (content.includes('delivered') || content.includes('has arrived')) return 'delivered';
-    if (content.includes('shipped') || content.includes('on its way') || content.includes('in transit')) return 'shipped';
-    if (content.includes('subscription') || content.includes('renewal') || content.includes('billing')) return 'subscription';
-    if (content.includes('processing') || content.includes('preparing')) return 'processing';
-    return 'ordered';
+function getHeader(headers, name) {
+    const h = headers.find(h => h.name.toLowerCase() === name.toLowerCase());
+    return h ? h.value : null;
 }
 
 function getEmailBody(payload) {
     let body = '';
-    if (payload.body && payload.body.data) {
+    if (payload.body?.data) {
         body = decodeBase64(payload.body.data);
     } else if (payload.parts) {
         for (const part of payload.parts) {
-            if (part.mimeType === 'text/plain' && part.body && part.body.data) {
+            if (part.mimeType === 'text/plain' && part.body?.data) {
                 body = decodeBase64(part.body.data);
                 break;
             }
-            if (part.mimeType === 'text/html' && part.body && part.body.data) {
-                body = stripHtml(decodeBase64(part.body.data));
-            }
             if (part.parts) {
                 for (const subpart of part.parts) {
-                    if (subpart.mimeType === 'text/plain' && subpart.body && subpart.body.data) {
+                    if (subpart.mimeType === 'text/plain' && subpart.body?.data) {
                         body = decodeBase64(subpart.body.data);
                         break;
                     }
+                }
+            }
+        }
+        if (!body) {
+            for (const part of payload.parts) {
+                if (part.mimeType === 'text/html' && part.body?.data) {
+                    body = stripHtml(decodeBase64(part.body.data));
+                    break;
                 }
             }
         }
@@ -469,111 +617,69 @@ function stripHtml(html) {
     return doc.body.textContent || '';
 }
 
-function getHeader(headers, name) {
-    const header = headers.find(h => h.name.toLowerCase() === name.toLowerCase());
-    return header ? header.value : null;
-}
+// ============ UI FUNCTIONS ============
 
-function extractSenderName(from) {
-    const match = from.match(/^"?([^"<]+)"?\s*</);
-    return match ? match[1].trim() : from.split('@')[0];
-}
+function setFilter(filter) {
+    currentFilter = filter;
 
-function extractMerchant(from) {
-    const emailMatch = from.match(/<([^>]+)>/) || from.match(/([^\s]+@[^\s]+)/);
-    if (emailMatch) {
-        const domain = emailMatch[1].split('@')[1];
-        if (domain) {
-            const name = domain.split('.')[0];
-            return name.charAt(0).toUpperCase() + name.slice(1);
-        }
+    // Update card highlighting
+    document.querySelectorAll('.summary-card').forEach(card => {
+        card.classList.toggle('active', card.dataset.filter === filter);
+    });
+
+    // Update filter label
+    const labels = {
+        'all': 'All Orders',
+        'pending': 'In Transit',
+        'delivered': 'Delivered'
+    };
+    if (filterLabel) filterLabel.textContent = 'Showing: ' + (labels[filter] || 'All');
+
+    // Show/hide clear button
+    if (clearFilterBtn) {
+        clearFilterBtn.classList.toggle('hidden', filter === 'all');
     }
-    return 'Unknown';
-}
 
-function deduplicateOrders(orders) {
-    const seen = new Map();
-    return orders.filter(order => {
-        const key = order.id;
-        if (seen.has(key)) return false;
-        seen.set(key, true);
-        return true;
-    });
-}
+    // Filter and display
+    if (filter === 'all') {
+        filteredOrders = [...allOrders];
+    } else if (filter === 'pending') {
+        filteredOrders = allOrders.filter(o => o.status !== 'delivered');
+    } else if (filter === 'delivered') {
+        filteredOrders = allOrders.filter(o => o.status === 'delivered');
+    }
 
-// ============ UI Functions ============
-
-function createFilterButtons() {
-    const categories = ['ALL', ...new Set(allOrders.map(o => o.source))];
-
-    filterButtons.innerHTML = categories.map(cat => `
-        <button class="filter-btn ${cat === 'ALL' ? 'active' : ''}"
-                data-category="${cat}"
-                style="${cat !== 'ALL' ? `--cat-color: ${CATEGORY_COLORS[cat] || '#666'}` : ''}">
-            ${cat === 'ALL' ? 'All' : cat}
-            <span class="count">${cat === 'ALL' ? allOrders.length : allOrders.filter(o => o.source === cat).length}</span>
-        </button>
-    `).join('');
-
-    filterButtons.querySelectorAll('.filter-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            filterButtons.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            activeFilter = btn.dataset.category;
-            applyFilters();
-        });
-    });
-}
-
-function createStatusFilterButtons() {
-    const statuses = ['ALL', 'delivered', 'shipped', 'ordered', 'subscription'];
-
-    statusFilterButtons.innerHTML = statuses.map(status => {
-        const config = STATUS_CONFIG[status] || { label: 'All', icon: '📋' };
-        const count = status === 'ALL' ? allOrders.length : allOrders.filter(o => o.status === status).length;
-        if (count === 0 && status !== 'ALL') return '';
-        return `
-            <button class="status-filter-btn ${status === 'ALL' ? 'active' : ''}" data-status="${status}">
-                ${status === 'ALL' ? '📋' : config.icon} ${status === 'ALL' ? 'All' : config.label}
-            </button>
-        `;
-    }).join('');
-
-    statusFilterButtons.querySelectorAll('.status-filter-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            statusFilterButtons.querySelectorAll('.status-filter-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            activeStatusFilter = btn.dataset.status;
-            applyFilters();
-        });
-    });
-}
-
-function applyFilters() {
-    filteredOrders = allOrders.filter(order => {
-        const categoryMatch = activeFilter === 'ALL' || order.source === activeFilter;
-        const statusMatch = activeStatusFilter === 'ALL' || order.status === activeStatusFilter;
-        return categoryMatch && statusMatch;
-    });
     displayOrders();
-    updateSummary();
+}
+
+function updateSummary() {
+    const totalSpent = allOrders.reduce((sum, o) => sum + (o.amount || 0), 0);
+    const delivered = allOrders.filter(o => o.status === 'delivered').length;
+    const pending = allOrders.filter(o => o.status !== 'delivered').length;
+
+    document.getElementById('totalSpent').textContent = '$' + totalSpent.toFixed(2);
+    document.getElementById('totalOrders').textContent = allOrders.length;
+    document.getElementById('deliveredCount').textContent = delivered;
+    document.getElementById('pendingCount').textContent = pending;
 }
 
 function displayOrders() {
+    if (!ordersContainer) return;
+
     if (filteredOrders.length === 0) {
         ordersContainer.innerHTML = `
             <div class="no-orders">
-                <div class="no-orders-icon">📦</div>
-                <p>No orders found</p>
-                <p class="no-orders-hint">Try adjusting your filters</p>
+                <div class="no-orders-icon">${currentFilter === 'pending' ? '✓' : '📦'}</div>
+                <p>${currentFilter === 'pending' ? 'No pending orders!' : 'No orders found'}</p>
             </div>
         `;
         return;
     }
 
+    // Group by date
     const ordersByDate = {};
     filteredOrders.forEach(order => {
-        const dateKey = order.orderDate;
+        const dateKey = order.orderDate.toISOString().split('T')[0];
         if (!ordersByDate[dateKey]) ordersByDate[dateKey] = [];
         ordersByDate[dateKey].push(order);
     });
@@ -581,10 +687,9 @@ function displayOrders() {
     let html = '';
     Object.keys(ordersByDate).sort((a, b) => new Date(b) - new Date(a)).forEach(dateKey => {
         const orders = ordersByDate[dateKey];
-        const formattedDate = formatDateHeader(dateKey);
         html += `
             <div class="date-group">
-                <div class="date-header">${formattedDate}</div>
+                <div class="date-header">${formatDateHeader(dateKey)}</div>
                 ${orders.map(order => createOrderCard(order)).join('')}
             </div>
         `;
@@ -592,6 +697,7 @@ function displayOrders() {
 
     ordersContainer.innerHTML = html;
 
+    // Add click handlers for expansion
     ordersContainer.querySelectorAll('.order-card').forEach(card => {
         card.addEventListener('click', () => card.classList.toggle('expanded'));
     });
@@ -605,81 +711,104 @@ function formatDateHeader(dateStr) {
 
     if (dateStr === today.toISOString().split('T')[0]) return 'Today';
     if (dateStr === yesterday.toISOString().split('T')[0]) return 'Yesterday';
-    return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    return date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 }
 
 function createOrderCard(order) {
-    const statusConfig = STATUS_CONFIG[order.status] || STATUS_CONFIG.ordered;
-    const categoryColor = CATEGORY_COLORS[order.source] || '#666';
-    const itemName = order.items[0]?.name || order.subject;
-    const price = order.totalPrice > 0 ? `$${order.totalPrice.toFixed(2)}` : '';
+    const statusColors = {
+        'delivered': '#4CAF50',
+        'shipped': '#2196F3',
+        'ordered': '#FF9800'
+    };
+    const statusIcons = {
+        'delivered': '✓',
+        'shipped': '📦',
+        'ordered': '○'
+    };
+
+    const statusColor = statusColors[order.status] || '#999';
+    const statusIcon = statusIcons[order.status] || '○';
+    const price = order.amount > 0 ? `$${order.amount.toFixed(2)}` : '';
+
+    // Build tracking info for pending orders
+    let trackingHtml = '';
+    if (order.status !== 'delivered' && order.tracking) {
+        trackingHtml = `
+            <div class="tracking-info">
+                <span class="tracking-carrier">${order.tracking.carrier}</span>
+                <span class="tracking-number">${order.tracking.number}</span>
+            </div>
+        `;
+    }
+
+    // Build timeline
+    let timelineHtml = '<div class="order-timeline">';
+    if (order.orderDate) {
+        timelineHtml += `<div class="timeline-item">📋 Ordered: ${formatDate(order.orderDate)}</div>`;
+    }
+    if (order.paymentMethod) {
+        timelineHtml += `<div class="timeline-item">💳 Paid via ${order.paymentMethod}</div>`;
+    }
+    if (order.shipDate) {
+        timelineHtml += `<div class="timeline-item">📦 Shipped: ${formatDate(order.shipDate)}</div>`;
+    }
+    if (order.deliveryDate) {
+        timelineHtml += `<div class="timeline-item">✓ Delivered: ${formatDate(order.deliveryDate)}</div>`;
+    }
+    timelineHtml += '</div>';
 
     return `
-        <div class="order-card" data-order-id="${order.id}">
+        <div class="order-card" data-status="${order.status}">
             <div class="order-main">
-                <div class="order-category" style="background-color: ${categoryColor}">
-                    ${getCategoryIcon(order.source)}
+                <div class="order-status-icon" style="background-color: ${statusColor}">
+                    ${statusIcon}
                 </div>
                 <div class="order-info">
-                    <div class="order-title">${escapeHtml(itemName.substring(0, 60))}</div>
+                    <div class="order-title">${escapeHtml(order.itemName)}</div>
                     <div class="order-meta">
                         <span class="order-merchant">${escapeHtml(order.merchant)}</span>
                         ${price ? `<span class="order-price">${price}</span>` : ''}
                     </div>
                 </div>
-                <div class="order-status" style="color: ${statusConfig.color}">
-                    <span class="status-icon">${statusConfig.icon}</span>
-                    <span class="status-text">${statusConfig.label}</span>
+                <div class="order-status-label" style="color: ${statusColor}">
+                    ${order.status.charAt(0).toUpperCase() + order.status.slice(1)}
                 </div>
             </div>
+            ${trackingHtml}
             <div class="order-details">
-                <div class="order-subject">${escapeHtml(order.subject)}</div>
-                <div class="order-from">From: ${escapeHtml(order.from)}</div>
-                ${order.snippet ? `<div class="order-snippet">${escapeHtml(order.snippet.substring(0, 200))}...</div>` : ''}
-                ${order.isSubscription ? '<div class="subscription-badge">Subscription</div>' : ''}
+                ${timelineHtml}
+                ${order.orderNumber ? `<div class="order-number">Order #${order.orderNumber}</div>` : ''}
+                ${order.emails.length > 1 ? `<div class="email-count">${order.emails.length} related emails</div>` : ''}
             </div>
         </div>
     `;
 }
 
-function getCategoryIcon(source) {
-    const icons = {
-        'AMAZON': '📦',
-        'PAYPAL': '💳',
-        'STORE': '🛒',
-        'AI': '🤖',
-        'DIVIDED WE STAND': '👕',
-        'BMW': '🚗',
-        'QUALITY-WEB-TIME': '🌐',
-        'SUBSCRIPTIONS': '↻',
-        'OTHER': '🛍️'
-    };
-    return icons[source] || '📦';
-}
-
-function updateSummary() {
-    const totalSpent = filteredOrders.reduce((sum, order) => sum + (order.totalPrice || 0), 0);
-    const pendingCount = filteredOrders.filter(o => ['ordered', 'processing', 'shipped'].includes(o.status)).length;
-
-    totalSpentEl.textContent = `$${totalSpent.toFixed(2)}`;
-    totalOrdersEl.textContent = filteredOrders.length;
-    pendingOrdersEl.textContent = pendingCount;
+function formatDate(date) {
+    if (!date) return '';
+    return new Date(date).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: date.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined
+    });
 }
 
 function updateLastUpdated() {
-    const now = new Date();
-    lastUpdatedEl.textContent = now.toLocaleDateString('en-US', {
-        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
-    });
+    const el = document.getElementById('lastUpdated');
+    if (el) {
+        el.textContent = new Date().toLocaleString('en-US', {
+            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+        });
+    }
 }
 
 function escapeHtml(text) {
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = text || '';
     return div.innerHTML;
 }
 
-// Register service worker
+// Service Worker
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('service-worker.js')
