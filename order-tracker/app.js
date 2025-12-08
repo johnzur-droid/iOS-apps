@@ -1,9 +1,10 @@
-// Order Tracker - Gmail API Integration
+// Order Tracker - Gmail API Integration v62
 // Scans Gmail for order confirmations from the last 60 days
 
 // Google API Configuration
-const CLIENT_ID = '457025763296-osgitgjro33vo2tcc5d2d596isroij5v.apps.googleusercontent.com';
-const API_KEY = 'AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco';
+// Using NEW Gmail Client ID (not the calendar one)
+const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
+// No API key needed - OAuth token is sufficient for Gmail API
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
 
@@ -77,20 +78,23 @@ if (retryBtn) retryBtn.addEventListener('click', () => showSection('auth'));
 
 function gapiLoaded() {
     if (typeof gapi === 'undefined') {
+        console.log('gapi undefined, retrying...');
         setTimeout(gapiLoaded, 1000);
         return;
     }
+    console.log('GAPI script loaded');
     gapi.load('client', async () => {
         try {
+            // No API key needed - OAuth token handles auth
             await gapi.client.init({
-                apiKey: API_KEY,
                 discoveryDocs: [DISCOVERY_DOC],
             });
             gapiInited = true;
+            console.log('GAPI client initialized');
             maybeEnableButtons();
         } catch (error) {
             console.error('GAPI init error:', error);
-            showError('Failed to initialize Google API.');
+            showError('Failed to initialize Google API: ' + (error.message || error.error || JSON.stringify(error)));
         }
     });
 }

@@ -2,368 +2,95 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Orders">
-    <title>Gmail Order Tracker</title>
+    <meta name="theme-color" content="#1a1a2e">
+    <title>Order Tracker - Last 60 Days</title>
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a2e;
-            color: #fff;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        h1 { text-align: center; margin-bottom: 20px; }
-        #status {
-            background: #252542;
-            border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            line-height: 1.6;
-        }
-        .auth-btn {
-            display: block;
-            width: 100%;
-            padding: 16px;
-            margin: 20px 0;
-            border: none;
-            border-radius: 12px;
-            background: #6366f1;
-            color: white;
-            font-size: 18px;
-            font-weight: 600;
-            cursor: pointer;
-        }
-        .auth-btn:disabled { background: #666; }
-        #log {
-            background: #0f0f1a;
-            border-radius: 8px;
-            padding: 12px;
-            font-family: monospace;
-            font-size: 12px;
-            max-height: 400px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-        .log-info { color: #2196F3; }
-        .log-success { color: #4CAF50; }
-        .log-error { color: #F44336; }
-        .log-warn { color: #FF9800; }
-        #orders {
-            margin-top: 20px;
-        }
-        .order-card {
-            background: #252542;
-            border-radius: 12px;
-            padding: 14px;
-            margin-bottom: 12px;
-        }
-        .order-subject {
-            font-weight: 600;
-            margin-bottom: 6px;
-        }
-        .order-from {
-            font-size: 13px;
-            color: #a0a0b0;
-            margin-bottom: 4px;
-        }
-        .order-date {
-            font-size: 12px;
-            color: #6a6a7a;
-        }
-        .order-snippet {
-            font-size: 12px;
-            color: #888;
-            margin-top: 8px;
-            line-height: 1.4;
-        }
-    </style>
+    <link rel="stylesheet" href="styles.css?v=62">
 </head>
 <body>
-    <h1>Order Tracker v61</h1>
-    <div id="status">Loading...</div>
-    <button id="authBtn" class="auth-btn" disabled>Loading...</button>
-    <div id="log"></div>
-    <div id="orders"></div>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1>My Orders</h1>
+            <span class="subtitle">Last 60 Days</span>
+        </header>
 
-    <script>
-        // ========== CONFIG ==========
-        // NEW Gmail Client ID (not the calendar one!)
-        const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
-        const API_KEY = 'AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco';
-        const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
-        const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
+        <!-- Auth Section -->
+        <div id="authSection" class="auth-section">
+            <div class="auth-content">
+                <div class="auth-icon">📧</div>
+                <h2>Connect Gmail</h2>
+                <p>Sign in with Google to scan your email for order confirmations, shipping updates, and subscriptions.</p>
+                <button id="authorizeBtn" class="auth-btn">Connect Gmail Account</button>
+                <p class="auth-note">We only read emails to find your orders. Your data stays on your device.</p>
+            </div>
+        </div>
 
-        // ========== DOM ==========
-        const statusEl = document.getElementById('status');
-        const logEl = document.getElementById('log');
-        const authBtn = document.getElementById('authBtn');
-        const ordersEl = document.getElementById('orders');
+        <!-- Loading Section -->
+        <div id="loadingSection" class="loading-section hidden">
+            <div class="spinner"></div>
+            <p id="scanProgress">Scanning your emails...</p>
+            <p class="loading-note">Checking STORE, PAYPAL, AI, AMAZON, and more...</p>
+        </div>
 
-        // ========== LOGGING ==========
-        function log(msg, type = 'info') {
-            console.log(msg);
-            const div = document.createElement('div');
-            div.className = 'log-' + type;
-            div.textContent = new Date().toLocaleTimeString() + ' - ' + msg;
-            logEl.appendChild(div);
-            logEl.scrollTop = logEl.scrollHeight;
-        }
+        <!-- Orders Section -->
+        <div id="ordersSection" class="orders-section hidden">
+            <!-- Summary Stats -->
+            <div id="summaryStats" class="summary-stats">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalSpent">$0.00</div>
+                    <div class="stat-label">Total Spent</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="totalOrders">0</div>
+                    <div class="stat-label">Orders</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="pendingOrders">0</div>
+                    <div class="stat-label">In Transit</div>
+                </div>
+            </div>
 
-        function setStatus(msg) {
-            statusEl.textContent = msg;
-            log(msg);
-        }
+            <!-- Category Filters -->
+            <div class="filter-section">
+                <div class="filter-label">Categories</div>
+                <div id="filterButtons" class="filter-buttons"></div>
+            </div>
 
-        // ========== GLOBALS ==========
-        let tokenClient = null;
-        let gapiReady = false;
-        let gisReady = false;
+            <!-- Status Filters -->
+            <div class="filter-section status-section">
+                <div class="filter-label">Status</div>
+                <div id="statusFilterButtons" class="status-filter-buttons"></div>
+            </div>
 
-        // ========== INIT ==========
-        setStatus('Starting up...');
-        log('Client ID: ' + CLIENT_ID.substring(0, 20) + '...', 'info');
+            <!-- Orders List -->
+            <main id="ordersContainer" class="orders-container"></main>
 
-        // Load GAPI
-        function gapiLoaded() {
-            log('GAPI script loaded', 'success');
-            if (typeof gapi === 'undefined') {
-                log('gapi undefined, retrying in 1s', 'warn');
-                setTimeout(gapiLoaded, 1000);
-                return;
-            }
-            gapi.load('client', async function() {
-                try {
-                    // Don't use API key - OAuth token is sufficient for Gmail
-                    await gapi.client.init({
-                        discoveryDocs: [DISCOVERY_DOC]
-                    });
-                    gapiReady = true;
-                    log('GAPI client initialized', 'success');
-                    checkReady();
-                } catch (e) {
-                    log('GAPI init error: ' + (e.message || e.error || JSON.stringify(e)), 'error');
-                    setStatus('Error: ' + (e.message || e.error || JSON.stringify(e)));
-                }
-            });
-        }
+            <!-- Footer -->
+            <footer class="app-footer">
+                <span>Updated: <span id="lastUpdated">--</span></span>
+                <button id="refreshBtn" class="refresh-btn">Refresh</button>
+            </footer>
+        </div>
 
-        // Load GIS
-        function gisLoaded() {
-            log('GIS script loaded', 'success');
-            if (typeof google === 'undefined') {
-                log('google undefined, retrying in 1s', 'warn');
-                setTimeout(gisLoaded, 1000);
-                return;
-            }
-            try {
-                tokenClient = google.accounts.oauth2.initTokenClient({
-                    client_id: CLIENT_ID,
-                    scope: SCOPES,
-                    callback: handleAuthCallback
-                });
-                gisReady = true;
-                log('GIS token client initialized', 'success');
-                checkReady();
-            } catch (e) {
-                log('GIS init error: ' + e.message, 'error');
-                setStatus('Error: ' + e.message);
-            }
-        }
+        <!-- Error Section -->
+        <div id="errorSection" class="error-section hidden">
+            <div class="error-content">
+                <div class="error-icon">⚠️</div>
+                <p id="errorMessage">An error occurred</p>
+                <button id="retryBtn" class="retry-btn">Try Again</button>
+            </div>
+        </div>
+    </div>
 
-        function checkReady() {
-            log('Check ready: GAPI=' + gapiReady + ', GIS=' + gisReady);
-            if (gapiReady && gisReady) {
-                setStatus('Ready! Click the button to connect Gmail.');
-                authBtn.disabled = false;
-                authBtn.textContent = 'Connect Gmail';
-                log('Both APIs ready!', 'success');
-            }
-        }
-
-        // ========== AUTH ==========
-        authBtn.addEventListener('click', function() {
-            log('Auth button clicked');
-            if (!tokenClient) {
-                log('tokenClient is null!', 'error');
-                setStatus('Error: Auth not initialized');
-                return;
-            }
-            setStatus('Requesting Gmail access...');
-            authBtn.disabled = true;
-            try {
-                tokenClient.requestAccessToken({ prompt: 'select_account' });
-            } catch (e) {
-                log('requestAccessToken error: ' + e.message, 'error');
-                setStatus('Error: ' + e.message);
-                authBtn.disabled = false;
-            }
-        });
-
-        function handleAuthCallback(resp) {
-            log('Auth callback received');
-            if (resp.error) {
-                log('Auth error: ' + resp.error, 'error');
-                setStatus('Auth failed: ' + resp.error);
-                authBtn.disabled = false;
-                authBtn.textContent = 'Try Again';
-                return;
-            }
-            log('Auth successful!', 'success');
-            setStatus('Connected! Scanning Gmail...');
-            authBtn.textContent = 'Connected';
-            scanGmail();
-        }
-
-        // ========== GMAIL SCAN ==========
-        async function scanGmail() {
-            try {
-                log('Starting Gmail scan...');
-
-                // First, list labels
-                log('Fetching labels...');
-                const labelsResp = await gapi.client.gmail.users.labels.list({ userId: 'me' });
-                const labels = labelsResp.result.labels || [];
-                log('Found ' + labels.length + ' labels', 'success');
-
-                // Show user labels
-                const userLabels = labels.filter(l => l.type === 'user');
-                log('User labels: ' + userLabels.map(l => l.name).join(', '));
-
-                // Search for order-related emails
-                const queries = [
-                    'label:STORE',
-                    'label:PAYPAL',
-                    'from:amazon subject:order',
-                    'subject:"order confirmed"',
-                    'subject:"your order"',
-                    'subject:"order confirmation"',
-                    'subject:"shipping confirmation"'
-                ];
-
-                let allMessages = [];
-
-                for (const query of queries) {
-                    log('Searching: ' + query);
-                    try {
-                        const sixtyDaysAgo = new Date();
-                        sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
-                        const afterDate = sixtyDaysAgo.toISOString().split('T')[0].replace(/-/g, '/');
-                        const fullQuery = query + ' after:' + afterDate;
-
-                        const resp = await gapi.client.gmail.users.messages.list({
-                            userId: 'me',
-                            q: fullQuery,
-                            maxResults: 50
-                        });
-
-                        const messages = resp.result.messages || [];
-                        log('  Found ' + messages.length + ' messages', messages.length > 0 ? 'success' : 'warn');
-                        allMessages = allMessages.concat(messages);
-                    } catch (e) {
-                        log('  Search error: ' + e.message, 'error');
-                    }
-                }
-
-                // Dedupe by ID
-                const uniqueIds = [...new Set(allMessages.map(m => m.id))];
-                log('Total unique messages: ' + uniqueIds.length, 'success');
-
-                if (uniqueIds.length === 0) {
-                    setStatus('No orders found in the last 60 days.');
-                    ordersEl.innerHTML = '<div class="order-card">No orders found. Try checking your Gmail labels.</div>';
-                    return;
-                }
-
-                // Fetch message details (limit to first 20)
-                const messagesToShow = uniqueIds.slice(0, 20);
-                log('Fetching details for ' + messagesToShow.length + ' messages...');
-
-                const orders = [];
-                for (const msgId of messagesToShow) {
-                    try {
-                        const msg = await gapi.client.gmail.users.messages.get({
-                            userId: 'me',
-                            id: msgId,
-                            format: 'metadata',
-                            metadataHeaders: ['Subject', 'From', 'Date']
-                        });
-
-                        const headers = msg.result.payload.headers;
-                        orders.push({
-                            id: msgId,
-                            subject: getHeader(headers, 'Subject') || '(No subject)',
-                            from: getHeader(headers, 'From') || '(Unknown)',
-                            date: getHeader(headers, 'Date') || '',
-                            snippet: msg.result.snippet
-                        });
-                    } catch (e) {
-                        log('Error fetching message ' + msgId + ': ' + e.message, 'error');
-                    }
-                }
-
-                log('Got ' + orders.length + ' order details', 'success');
-                setStatus('Found ' + orders.length + ' orders!');
-                displayOrders(orders);
-
-            } catch (e) {
-                log('Scan error: ' + e.message, 'error');
-                setStatus('Error: ' + e.message);
-            }
-        }
-
-        function getHeader(headers, name) {
-            const h = headers.find(h => h.name === name);
-            return h ? h.value : null;
-        }
-
-        function displayOrders(orders) {
-            if (orders.length === 0) {
-                ordersEl.innerHTML = '<div class="order-card">No orders found.</div>';
-                return;
-            }
-
-            // Sort by date (newest first)
-            orders.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-            ordersEl.innerHTML = orders.map(order => {
-                const dateStr = order.date ? new Date(order.date).toLocaleDateString() : '';
-                const fromName = order.from.split('<')[0].trim().replace(/"/g, '');
-                return `
-                    <div class="order-card">
-                        <div class="order-subject">${escapeHtml(order.subject)}</div>
-                        <div class="order-from">${escapeHtml(fromName)}</div>
-                        <div class="order-date">${dateStr}</div>
-                        <div class="order-snippet">${escapeHtml(order.snippet)}</div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text || '';
-            return div.innerHTML;
-        }
-
-        // Error handler
-        window.onerror = function(msg, url, line, col, error) {
-            log('JS Error: ' + msg + ' at line ' + line, 'error');
-            setStatus('Error: ' + msg);
-            return false;
-        };
-
-        log('Script loaded, waiting for Google APIs...', 'info');
-    </script>
-
+    <!-- Google APIs -->
     <script src="https://apis.google.com/js/api.js" async defer onload="gapiLoaded()"></script>
     <script src="https://accounts.google.com/gsi/client" async defer onload="gisLoaded()"></script>
+    <script src="app.js?v=62"></script>
 </body>
 </html>
