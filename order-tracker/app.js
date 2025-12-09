@@ -1,55 +1,50 @@
-// Order Tracker v63 - Smart Order Correlation
-// Correlates emails from stores, PayPal, and shippers into unified orders
-
+// Order Tracker v64 - Improved Status Detection & Correlation
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
 
-let tokenClient;
-let gapiInited = false;
-let gisInited = false;
-
-// Configuration
+let tokenClient, gapiInited = false, gisInited = false;
 let selectedDays = 90;
+let allOrders = [], filteredOrders = [], currentFilter = 'pending';
+
 const LABEL_NAMES = ['STORE', 'PAYPAL', 'AI', 'DIVIDED WE STAND', 'BMW', 'QUALITY-WEB-TIME'];
 
-// Shipping carriers for tracking
-const CARRIERS = {
-    'ups': { pattern: /\b1Z[A-Z0-9]{16}\b/i, name: 'UPS' },
-    'usps': { pattern: /\b(94|93|92|94|95)[0-9]{20}\b/, name: 'USPS' },
-    'fedex': { pattern: /\b[0-9]{12,22}\b/, name: 'FedEx' }
-};
-
-// Keywords to identify order-related emails
-const ORDER_KEYWORDS = [
-    'order confirm', 'order received', 'order placed', 'thank you for your order',
-    'purchase confirm', 'receipt for your', 'payment confirm', 'transaction',
-    'your order', 'order #', 'order number', 'invoice'
+// More comprehensive delivery detection
+const DELIVERED_PATTERNS = [
+    /delivered/i, /has been delivered/i, /was delivered/i,
+    /left at/i, /signed for/i, /picked up/i,
+    /delivery complete/i, /successfully delivered/i,
+    /your package arrived/i, /your order arrived/i,
+    /out for delivery.*delivered/i, /dropped off/i
 ];
 
-const SHIPPING_KEYWORDS = [
-    'shipped', 'shipping confirm', 'on its way', 'in transit', 'out for delivery',
-    'tracking number', 'track your', 'shipment', 'delivery'
+const SHIPPED_PATTERNS = [
+    /has shipped/i, /has been shipped/i, /your order shipped/i,
+    /shipment.*on the way/i, /on its way/i, /in transit/i,
+    /tracking number/i, /track your package/i, /track your order/i,
+    /shipping confirmation/i, /out for delivery/i
 ];
 
-const DELIVERY_KEYWORDS = [
-    'delivered', 'has been delivered', 'was delivered', 'left at', 'signed for'
+const ORDER_PATTERNS = [
+    /order confirm/i, /order received/i, /thanks for your order/i,
+    /thank you for your order/i, /purchase confirm/i,
+    /receipt for your/i, /your order #/i, /order number/i,
+    /we received your order/i, /order has been placed/i
 ];
 
-// Keywords to EXCLUDE - not orders
-const EXCLUDE_KEYWORDS = [
-    'password reset', 'verify your email', 'sign in', 'security alert',
-    'update from', 'newsletter', 'weekly digest', 'unsubscribe',
-    'account update', 'privacy policy', 'terms of service',
-    'survey', 'feedback', 'how was your', 'rate your'
+// Exclude these - NOT orders
+const EXCLUDE_PATTERNS = [
+    /password reset/i, /verify your email/i, /sign.?in/i,
+    /security alert/i, /update from/i, /newsletter/i,
+    /weekly digest/i, /unsubscribe/i, /privacy policy/i,
+    /terms of service/i, /survey/i, /feedback/i,
+    /how was your/i, /rate your/i, /leave.*(review|feedback)/i,
+    /your opinion/i, /we miss you/i, /come back/i,
+    /sale ends/i, /% off/i, /limited time/i, /deal of/i,
+    /don't miss/i, /last chance/i, /flash sale/i
 ];
 
-// State
-let allOrders = [];
-let filteredOrders = [];
-let currentFilter = 'pending';
-
-// DOM Elements
+// DOM
 const authSection = document.getElementById('authSection');
 const loadingSection = document.getElementById('loadingSection');
 const ordersSection = document.getElementById('ordersSection');
@@ -64,79 +59,60 @@ const loadingNoteEl = document.getElementById('loadingNote');
 const filterLabel = document.getElementById('filterLabel');
 const clearFilterBtn = document.getElementById('clearFilter');
 
-// Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v63 loaded');
+    console.log('Order Tracker v64');
     setupEventListeners();
 });
 
 function setupEventListeners() {
-    if (authorizeBtn) authorizeBtn.addEventListener('click', handleAuthClick);
-    if (refreshBtn) refreshBtn.addEventListener('click', () => scanEmails());
-    if (retryBtn) retryBtn.addEventListener('click', () => showSection('auth'));
-    if (clearFilterBtn) clearFilterBtn.addEventListener('click', () => setFilter('all'));
+    authorizeBtn?.addEventListener('click', handleAuthClick);
+    refreshBtn?.addEventListener('click', () => scanEmails());
+    retryBtn?.addEventListener('click', () => showSection('auth'));
+    clearFilterBtn?.addEventListener('click', () => setFilter('all'));
 
-    // Time selector buttons
     document.querySelectorAll('.time-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             selectedDays = parseInt(btn.dataset.days);
-            if (gapi.client.getToken()) {
-                scanEmails();
-            }
+            if (gapi?.client?.getToken()) scanEmails();
         });
     });
 
-    // Summary card clicks
     document.querySelectorAll('.summary-card').forEach(card => {
-        card.addEventListener('click', () => {
-            const filter = card.dataset.filter;
-            setFilter(filter);
-        });
+        card.addEventListener('click', () => setFilter(card.dataset.filter));
     });
 }
 
 function gapiLoaded() {
-    if (typeof gapi === 'undefined') {
-        setTimeout(gapiLoaded, 1000);
-        return;
-    }
+    if (typeof gapi === 'undefined') { setTimeout(gapiLoaded, 1000); return; }
     gapi.load('client', async () => {
         try {
             await gapi.client.init({ discoveryDocs: [DISCOVERY_DOC] });
             gapiInited = true;
             maybeEnableButtons();
-        } catch (error) {
-            console.error('GAPI init error:', error);
-            showError('Failed to initialize: ' + (error.message || JSON.stringify(error)));
+        } catch (e) {
+            showError('Init failed: ' + (e.message || JSON.stringify(e)));
         }
     });
 }
 
 function gisLoaded() {
-    if (typeof google === 'undefined') {
-        setTimeout(gisLoaded, 1000);
-        return;
-    }
+    if (typeof google === 'undefined') { setTimeout(gisLoaded, 1000); return; }
     try {
         tokenClient = google.accounts.oauth2.initTokenClient({
-            client_id: CLIENT_ID,
-            scope: SCOPES,
-            callback: handleAuthCallback
+            client_id: CLIENT_ID, scope: SCOPES, callback: handleAuthCallback
         });
         gisInited = true;
         maybeEnableButtons();
-    } catch (error) {
-        console.error('GIS init error:', error);
-        showError('Failed to initialize authentication.');
+    } catch (e) {
+        showError('Auth init failed');
     }
 }
 
 function maybeEnableButtons() {
     if (gapiInited && gisInited) {
-        const token = gapi.client.getToken();
-        if (token) {
+        if (gapi.client.getToken()) {
             showSection('loading');
             scanEmails();
         } else {
@@ -146,109 +122,92 @@ function maybeEnableButtons() {
 }
 
 function handleAuthClick() {
-    if (!gapiInited || !gisInited || !tokenClient) {
-        showError('Not ready. Please refresh.');
-        return;
-    }
-    const hasAuth = localStorage.getItem('orders_authorized');
-    tokenClient.requestAccessToken({ prompt: hasAuth ? '' : 'select_account' });
+    if (!tokenClient) { showError('Not ready'); return; }
+    tokenClient.requestAccessToken({ prompt: localStorage.getItem('orders_auth') ? '' : 'select_account' });
 }
 
 function handleAuthCallback(resp) {
-    if (resp.error) {
-        showError('Auth failed: ' + resp.error);
-        return;
-    }
-    localStorage.setItem('orders_authorized', 'true');
+    if (resp.error) { showError('Auth failed: ' + resp.error); return; }
+    localStorage.setItem('orders_auth', 'true');
     showSection('loading');
     scanEmails();
 }
 
-function showSection(section) {
-    [authSection, loadingSection, ordersSection, errorSection].forEach(s => s?.classList.add('hidden'));
-    switch (section) {
-        case 'auth': authSection?.classList.remove('hidden'); break;
-        case 'loading': loadingSection?.classList.remove('hidden'); break;
-        case 'orders': ordersSection?.classList.remove('hidden'); break;
-        case 'error': errorSection?.classList.remove('hidden'); break;
-    }
+function showSection(s) {
+    [authSection, loadingSection, ordersSection, errorSection].forEach(el => el?.classList.add('hidden'));
+    document.getElementById(s + 'Section')?.classList.remove('hidden');
 }
 
-function showError(message) {
-    if (errorMessage) errorMessage.textContent = message;
+function showError(msg) {
+    if (errorMessage) errorMessage.textContent = msg;
     showSection('error');
 }
 
-function updateProgress(message, note = '') {
-    if (scanProgressEl) scanProgressEl.textContent = message;
+function updateProgress(msg, note = '') {
+    if (scanProgressEl) scanProgressEl.textContent = msg;
     if (loadingNoteEl) loadingNoteEl.textContent = note;
 }
 
-// ============ MAIN SCAN & CORRELATION ============
+// ============ MAIN SCAN ============
 
 async function scanEmails() {
     try {
         showSection('loading');
-        updateProgress('Connecting to Gmail...', '');
+        updateProgress('Connecting...', '');
 
-        const cutoffDate = new Date();
-        cutoffDate.setDate(cutoffDate.getDate() - selectedDays);
-        const afterDate = cutoffDate.toISOString().split('T')[0].replace(/-/g, '/');
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - selectedDays);
+        const afterDate = `${cutoff.getFullYear()}/${cutoff.getMonth()+1}/${cutoff.getDate()}`;
 
-        // Collect all raw emails
-        const rawEmails = [];
+        const emails = [];
 
-        // Search labels
-        updateProgress('Fetching labels...', '');
+        // Get labels
+        updateProgress('Getting labels...', '');
         const labelsResp = await gapi.client.gmail.users.labels.list({ userId: 'me' });
-        const allLabels = labelsResp.result.labels || [];
+        const labels = labelsResp.result.labels || [];
 
+        // Search each label
         for (const labelName of LABEL_NAMES) {
-            const label = allLabels.find(l => l.name.toUpperCase() === labelName.toUpperCase());
+            const label = labels.find(l => l.name.toUpperCase() === labelName);
             if (label) {
-                updateProgress(`Scanning ${labelName}...`, `Found label`);
-                const emails = await fetchEmailsWithQuery(`label:${labelName} after:${afterDate}`);
-                rawEmails.push(...emails.map(e => ({ ...e, source: labelName })));
+                updateProgress(`Scanning ${labelName}...`, '');
+                const found = await searchEmails(`label:${labelName} after:${afterDate}`);
+                emails.push(...found.map(e => ({ ...e, labelSource: labelName })));
             }
         }
 
-        // Search for Amazon orders
+        // Amazon
         updateProgress('Scanning Amazon...', '');
-        const amazonEmails = await fetchEmailsWithQuery(`from:amazon after:${afterDate}`);
-        rawEmails.push(...amazonEmails.map(e => ({ ...e, source: 'AMAZON' })));
+        const amazon = await searchEmails(`from:amazon after:${afterDate}`);
+        emails.push(...amazon.map(e => ({ ...e, labelSource: 'AMAZON' })));
 
-        // Search for shipping notifications
-        updateProgress('Scanning shipping updates...', '');
-        const shippingEmails = await fetchEmailsWithQuery(
-            `(from:ups OR from:usps OR from:fedex OR subject:shipped OR subject:tracking) after:${afterDate}`
+        // Shipping carriers
+        updateProgress('Scanning shipping...', '');
+        const shipping = await searchEmails(
+            `(from:ups.com OR from:usps.com OR from:fedex.com OR from:dhl.com) after:${afterDate}`
         );
-        rawEmails.push(...shippingEmails.map(e => ({ ...e, source: 'SHIPPING' })));
+        emails.push(...shipping.map(e => ({ ...e, labelSource: 'SHIPPING' })));
 
-        updateProgress('Processing emails...', `${rawEmails.length} emails found`);
+        updateProgress('Processing...', `${emails.length} emails`);
 
-        // Parse all emails
-        const parsedEmails = rawEmails.map(parseEmail).filter(e => e !== null);
+        // Process into orders
+        allOrders = processEmails(emails);
 
-        updateProgress('Correlating orders...', `${parsedEmails.length} relevant emails`);
-
-        // Correlate into orders
-        allOrders = correlateOrders(parsedEmails);
-
-        updateProgress('Finalizing...', `${allOrders.length} orders found`);
-
-        // Update UI
+        updateProgress('Done!', `${allOrders.length} orders`);
         updateSummary();
         setFilter('pending');
-        updateLastUpdated();
+        document.getElementById('lastUpdated').textContent = new Date().toLocaleString('en-US', {
+            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+        });
         showSection('orders');
 
-    } catch (error) {
-        console.error('Scan error:', error);
-        showError('Failed: ' + (error.message || 'Unknown error'));
+    } catch (e) {
+        console.error(e);
+        showError('Failed: ' + (e.message || 'Unknown'));
     }
 }
 
-async function fetchEmailsWithQuery(query) {
+async function searchEmails(query) {
     const emails = [];
     let pageToken = null;
 
@@ -256,408 +215,327 @@ async function fetchEmailsWithQuery(query) {
         const params = { userId: 'me', q: query, maxResults: 100 };
         if (pageToken) params.pageToken = pageToken;
 
-        const response = await gapi.client.gmail.users.messages.list(params);
-        const messages = response.result.messages || [];
+        const resp = await gapi.client.gmail.users.messages.list(params);
+        const msgs = resp.result.messages || [];
 
-        for (const msg of messages) {
+        for (const m of msgs) {
             try {
                 const full = await gapi.client.gmail.users.messages.get({
-                    userId: 'me',
-                    id: msg.id,
-                    format: 'full'
+                    userId: 'me', id: m.id, format: 'full'
                 });
                 emails.push(full.result);
-            } catch (e) {
-                console.error('Error fetching message:', e);
-            }
+            } catch (e) { }
         }
-
-        pageToken = response.result.nextPageToken;
-    } while (pageToken && emails.length < 500); // Cap at 500 emails
+        pageToken = resp.result.nextPageToken;
+    } while (pageToken && emails.length < 300);
 
     return emails;
 }
 
-function parseEmail(message) {
-    const headers = message.payload?.headers || [];
-    const subject = getHeader(headers, 'Subject') || '';
-    const from = getHeader(headers, 'From') || '';
-    const date = getHeader(headers, 'Date') || '';
-    const body = getEmailBody(message.payload);
-    const fullText = (subject + ' ' + body).toLowerCase();
+// ============ PROCESS EMAILS INTO ORDERS ============
 
-    // Skip excluded emails
-    if (EXCLUDE_KEYWORDS.some(kw => fullText.includes(kw.toLowerCase()))) {
-        return null;
+function processEmails(rawEmails) {
+    const validEmails = [];
+
+    // First pass: parse and filter
+    for (const email of rawEmails) {
+        const parsed = parseEmail(email);
+        if (parsed) validEmails.push(parsed);
     }
 
-    // Determine email type
-    let type = 'unknown';
-    if (DELIVERY_KEYWORDS.some(kw => fullText.includes(kw.toLowerCase()))) {
-        type = 'delivery';
-    } else if (SHIPPING_KEYWORDS.some(kw => fullText.includes(kw.toLowerCase()))) {
-        type = 'shipping';
-    } else if (ORDER_KEYWORDS.some(kw => fullText.includes(kw.toLowerCase()))) {
-        type = 'order';
-    } else if (from.toLowerCase().includes('paypal')) {
-        type = 'payment';
-    } else {
-        // Not order-related
-        return null;
-    }
+    console.log(`Parsed ${validEmails.length} valid emails from ${rawEmails.length} total`);
 
-    // Extract data
-    const amount = extractAmount(body);
-    const orderNumber = extractOrderNumber(subject + ' ' + body);
-    const trackingInfo = extractTracking(body);
-    const merchant = extractMerchant(from, subject, body);
+    // Group by potential order identifiers
+    const orderGroups = new Map();
 
-    return {
-        id: message.id,
-        type,
-        source: message.source,
-        subject,
-        from,
-        date: new Date(date),
-        amount,
-        orderNumber,
-        tracking: trackingInfo,
-        merchant,
-        snippet: message.snippet,
-        body: body.substring(0, 2000) // Limit body size
-    };
-}
+    for (const email of validEmails) {
+        // Try to find existing group
+        let foundGroup = null;
 
-function correlateOrders(emails) {
-    const orders = [];
-    const used = new Set();
-
-    // Sort by date (oldest first for correlation)
-    emails.sort((a, b) => a.date - b.date);
-
-    // First pass: Group by order number
-    const byOrderNumber = {};
-    emails.forEach(email => {
-        if (email.orderNumber && email.orderNumber.length > 3) {
-            if (!byOrderNumber[email.orderNumber]) {
-                byOrderNumber[email.orderNumber] = [];
-            }
-            byOrderNumber[email.orderNumber].push(email);
-        }
-    });
-
-    // Create orders from order number groups
-    for (const [orderNum, emailGroup] of Object.entries(byOrderNumber)) {
-        if (emailGroup.length > 0) {
-            const order = createOrderFromEmails(emailGroup, orderNum);
-            orders.push(order);
-            emailGroup.forEach(e => used.add(e.id));
-        }
-    }
-
-    // Second pass: Match remaining by amount + merchant + date proximity
-    const remaining = emails.filter(e => !used.has(e.id));
-
-    for (const email of remaining) {
-        if (used.has(email.id)) continue;
-        if (email.type === 'order' || email.type === 'payment') {
-            // Find related emails
-            const related = [email];
-            used.add(email.id);
-
-            // Look for shipping/delivery emails with similar merchant or tracking
-            for (const other of remaining) {
-                if (used.has(other.id)) continue;
-                if (isRelated(email, other)) {
-                    related.push(other);
-                    used.add(other.id);
+        // Match by order number
+        if (email.orderNumber) {
+            for (const [key, group] of orderGroups) {
+                if (group.some(e => e.orderNumber === email.orderNumber)) {
+                    foundGroup = key;
+                    break;
                 }
             }
+        }
 
-            const order = createOrderFromEmails(related);
-            orders.push(order);
+        // Match by tracking number
+        if (!foundGroup && email.trackingNumber) {
+            for (const [key, group] of orderGroups) {
+                if (group.some(e => e.trackingNumber === email.trackingNumber)) {
+                    foundGroup = key;
+                    break;
+                }
+            }
+        }
+
+        // Match by amount + merchant + date
+        if (!foundGroup && email.amount > 0) {
+            for (const [key, group] of orderGroups) {
+                const match = group.find(e =>
+                    e.amount > 0 &&
+                    Math.abs(e.amount - email.amount) < 0.50 &&
+                    similarMerchant(e.merchant, email.merchant) &&
+                    Math.abs(e.date - email.date) < 7 * 24 * 60 * 60 * 1000
+                );
+                if (match) {
+                    foundGroup = key;
+                    break;
+                }
+            }
+        }
+
+        if (foundGroup) {
+            orderGroups.get(foundGroup).push(email);
+        } else {
+            orderGroups.set(email.id, [email]);
         }
     }
 
-    // Third pass: Standalone shipping/delivery (no matching order)
-    for (const email of remaining) {
-        if (used.has(email.id)) continue;
-        if (email.type === 'shipping' || email.type === 'delivery') {
-            const order = createOrderFromEmails([email]);
-            orders.push(order);
-            used.add(email.id);
-        }
+    // Convert groups to orders
+    const orders = [];
+    for (const [id, emails] of orderGroups) {
+        const order = createOrder(emails);
+        if (order) orders.push(order);
     }
 
-    // Sort by date (newest first)
-    orders.sort((a, b) => b.orderDate - a.orderDate);
+    // Sort newest first
+    orders.sort((a, b) => b.date - a.date);
 
+    console.log(`Created ${orders.length} orders`);
     return orders;
 }
 
-function isRelated(email1, email2) {
-    // Same merchant
-    if (email1.merchant && email2.merchant &&
-        email1.merchant.toLowerCase() === email2.merchant.toLowerCase()) {
-        // Within 14 days
-        const daysDiff = Math.abs(email1.date - email2.date) / (1000 * 60 * 60 * 24);
-        if (daysDiff <= 14) return true;
+function parseEmail(msg) {
+    const headers = msg.payload?.headers || [];
+    const subject = getHeader(headers, 'Subject') || '';
+    const from = getHeader(headers, 'From') || '';
+    const dateStr = getHeader(headers, 'Date') || '';
+    const date = new Date(dateStr);
+
+    const body = getBody(msg.payload);
+    const fullText = subject + ' ' + body;
+
+    // Check exclusions FIRST
+    if (EXCLUDE_PATTERNS.some(p => p.test(fullText))) {
+        return null;
     }
 
-    // Similar amount (within $1)
-    if (email1.amount > 0 && email2.amount > 0) {
-        if (Math.abs(email1.amount - email2.amount) < 1) {
-            const daysDiff = Math.abs(email1.date - email2.date) / (1000 * 60 * 60 * 24);
-            if (daysDiff <= 7) return true;
-        }
+    // Must match at least one order/shipping/delivery pattern
+    const isOrder = ORDER_PATTERNS.some(p => p.test(fullText));
+    const isShipping = SHIPPED_PATTERNS.some(p => p.test(fullText));
+    const isDelivered = DELIVERED_PATTERNS.some(p => p.test(fullText));
+    const isPayPal = /paypal/i.test(from) && /payment|receipt|transaction/i.test(fullText);
+
+    if (!isOrder && !isShipping && !isDelivered && !isPayPal) {
+        return null;
     }
 
-    return false;
-}
-
-function createOrderFromEmails(emails, orderNumber = null) {
-    // Sort by date
-    emails.sort((a, b) => a.date - b.date);
-
-    const orderEmail = emails.find(e => e.type === 'order') || emails[0];
-    const paymentEmail = emails.find(e => e.type === 'payment');
-    const shippingEmail = emails.find(e => e.type === 'shipping');
-    const deliveryEmail = emails.find(e => e.type === 'delivery');
-
-    // Determine status
-    let status = 'ordered';
-    if (deliveryEmail) {
-        status = 'delivered';
-    } else if (shippingEmail) {
-        status = 'shipped';
-    }
-
-    // Get best amount
-    const amount = orderEmail?.amount || paymentEmail?.amount || shippingEmail?.amount || 0;
-
-    // Get tracking
-    const tracking = shippingEmail?.tracking || deliveryEmail?.tracking || null;
-
-    // Get merchant
-    const merchant = orderEmail?.merchant || paymentEmail?.merchant ||
-                     shippingEmail?.merchant || 'Unknown';
-
-    // Payment method
-    const paymentMethod = paymentEmail ? 'PayPal' : (orderEmail?.source === 'PAYPAL' ? 'PayPal' : 'Direct');
+    // Determine type
+    let type = 'order';
+    if (isDelivered) type = 'delivered';
+    else if (isShipping) type = 'shipping';
+    else if (isPayPal) type = 'payment';
 
     return {
-        id: orderEmail?.id || emails[0].id,
-        orderNumber: orderNumber || orderEmail?.orderNumber || null,
-        merchant,
-        amount,
-        paymentMethod,
-        status,
-        orderDate: orderEmail?.date || emails[0].date,
-        shipDate: shippingEmail?.date || null,
-        deliveryDate: deliveryEmail?.date || null,
-        tracking,
-        itemName: cleanSubject(orderEmail?.subject || emails[0].subject),
-        emails: emails.map(e => ({
-            type: e.type,
-            date: e.date,
-            subject: e.subject,
-            snippet: e.snippet
-        })),
-        source: orderEmail?.source || emails[0].source
+        id: msg.id,
+        type,
+        subject,
+        from,
+        date,
+        snippet: msg.snippet,
+        merchant: extractMerchant(from),
+        amount: extractAmount(fullText),
+        orderNumber: extractOrderNumber(fullText),
+        trackingNumber: extractTracking(fullText),
+        labelSource: msg.labelSource
     };
 }
 
-// ============ EXTRACTION HELPERS ============
+function createOrder(emails) {
+    if (!emails.length) return null;
 
-function extractAmount(text) {
-    const patterns = [
-        /(?:total|amount|charge|paid|price)[:\s]*\$?([\d,]+\.?\d*)/gi,
-        /\$\s*([\d,]+\.\d{2})/g
-    ];
+    // Sort chronologically
+    emails.sort((a, b) => a.date - b.date);
 
-    let amounts = [];
-    for (const pattern of patterns) {
-        let match;
-        while ((match = pattern.exec(text)) !== null) {
-            const amt = parseFloat(match[1].replace(/,/g, ''));
-            if (amt > 0 && amt < 50000) {
-                amounts.push(amt);
-            }
+    // Find key emails
+    const orderEmail = emails.find(e => e.type === 'order') || emails.find(e => e.type === 'payment');
+    const shippingEmail = emails.find(e => e.type === 'shipping');
+    const deliveredEmail = emails.find(e => e.type === 'delivered');
+
+    // DETERMINE STATUS - this is critical
+    let status = 'ordered';
+
+    // Check if ANY email indicates delivery
+    if (emails.some(e => e.type === 'delivered')) {
+        status = 'delivered';
+    }
+    // Check if shipped but not delivered
+    else if (emails.some(e => e.type === 'shipping')) {
+        status = 'shipped';
+
+        // If shipped more than 10 days ago, assume delivered
+        const shipDate = shippingEmail?.date;
+        if (shipDate && (Date.now() - shipDate) > 10 * 24 * 60 * 60 * 1000) {
+            status = 'delivered';
+        }
+    }
+    // If order is old (more than 14 days), assume delivered
+    else if (orderEmail) {
+        const orderAge = Date.now() - orderEmail.date;
+        if (orderAge > 14 * 24 * 60 * 60 * 1000) {
+            status = 'delivered';
         }
     }
 
-    // Return the largest reasonable amount (likely the total)
-    return amounts.length > 0 ? Math.max(...amounts) : 0;
+    // Get best values
+    const primaryEmail = orderEmail || emails[0];
+    const amount = emails.reduce((max, e) => Math.max(max, e.amount || 0), 0);
+    const tracking = shippingEmail?.trackingNumber || deliveredEmail?.trackingNumber;
+    const orderNum = emails.find(e => e.orderNumber)?.orderNumber;
+
+    return {
+        id: primaryEmail.id,
+        merchant: primaryEmail.merchant || 'Unknown',
+        item: cleanSubject(primaryEmail.subject),
+        amount,
+        status,
+        date: primaryEmail.date,
+        shipDate: shippingEmail?.date,
+        deliveryDate: deliveredEmail?.date,
+        tracking,
+        orderNumber: orderNum,
+        source: primaryEmail.labelSource,
+        emailCount: emails.length,
+        paymentMethod: emails.some(e => e.type === 'payment') ? 'PayPal' : 'Direct'
+    };
+}
+
+function similarMerchant(m1, m2) {
+    if (!m1 || !m2) return false;
+    const n1 = m1.toLowerCase().replace(/[^a-z]/g, '');
+    const n2 = m2.toLowerCase().replace(/[^a-z]/g, '');
+    return n1.includes(n2) || n2.includes(n1) || n1 === n2;
+}
+
+// ============ EXTRACTION ============
+
+function extractMerchant(from) {
+    // Try email domain
+    const domainMatch = from.match(/@([^.>]+)/);
+    if (domainMatch) {
+        const d = domainMatch[1].toLowerCase();
+        const map = {
+            'amazon': 'Amazon', 'paypal': 'PayPal', 'apple': 'Apple',
+            'google': 'Google', 'bestbuy': 'Best Buy', 'walmart': 'Walmart',
+            'target': 'Target', 'ebay': 'eBay', 'etsy': 'Etsy',
+            'ups': 'UPS', 'usps': 'USPS', 'fedex': 'FedEx'
+        };
+        for (const [k, v] of Object.entries(map)) {
+            if (d.includes(k)) return v;
+        }
+        return d.charAt(0).toUpperCase() + d.slice(1);
+    }
+    const nameMatch = from.match(/^"?([^"<]+)"?\s*</);
+    if (nameMatch) return nameMatch[1].trim();
+    return 'Unknown';
+}
+
+function extractAmount(text) {
+    const matches = text.match(/\$\s*([\d,]+\.\d{2})/g) || [];
+    const amounts = matches
+        .map(m => parseFloat(m.replace(/[$,]/g, '')))
+        .filter(a => a > 0 && a < 10000);
+    return amounts.length ? Math.max(...amounts) : 0;
 }
 
 function extractOrderNumber(text) {
     const patterns = [
-        /order\s*(?:#|number|num|no\.?)?[:\s]*([A-Z0-9-]{5,20})/gi,
-        /(?:#|number|no\.?)[:\s]*([A-Z0-9-]{5,20})/gi,
-        /([0-9]{3}-[0-9]{7}-[0-9]{7})/g // Amazon format
+        /order\s*#?\s*[:.]?\s*([A-Z0-9-]{6,20})/i,
+        /([0-9]{3}-[0-9]{7}-[0-9]{7})/  // Amazon
     ];
-
-    for (const pattern of patterns) {
-        const match = pattern.exec(text);
-        if (match) return match[1];
+    for (const p of patterns) {
+        const m = text.match(p);
+        if (m) return m[1];
     }
     return null;
 }
 
 function extractTracking(text) {
-    for (const [carrier, config] of Object.entries(CARRIERS)) {
-        const match = config.pattern.exec(text);
-        if (match) {
-            return {
-                carrier: config.name,
-                number: match[0]
-            };
-        }
-    }
+    // UPS
+    const ups = text.match(/\b1Z[A-Z0-9]{16}\b/i);
+    if (ups) return ups[0];
+    // USPS
+    const usps = text.match(/\b(94|93|92)[0-9]{18,20}\b/);
+    if (usps) return usps[0];
+    // FedEx
+    const fedex = text.match(/\b[0-9]{12,15}\b/);
+    if (fedex) return fedex[0];
     return null;
 }
 
-function extractMerchant(from, subject, body) {
-    // Try to get from email domain
-    const emailMatch = from.match(/@([^.>]+)/);
-    if (emailMatch) {
-        const domain = emailMatch[1].toLowerCase();
-        // Common mappings
-        const mappings = {
-            'amazon': 'Amazon',
-            'paypal': 'PayPal',
-            'apple': 'Apple',
-            'google': 'Google',
-            'microsoft': 'Microsoft',
-            'bestbuy': 'Best Buy',
-            'walmart': 'Walmart',
-            'target': 'Target',
-            'ebay': 'eBay',
-            'etsy': 'Etsy',
-            'nike': 'Nike',
-            'adidas': 'Adidas'
-        };
-
-        for (const [key, value] of Object.entries(mappings)) {
-            if (domain.includes(key)) return value;
-        }
-
-        // Capitalize first letter
-        return domain.charAt(0).toUpperCase() + domain.slice(1);
-    }
-
-    // Try to get from "From" name
-    const nameMatch = from.match(/^"?([^"<]+)"?\s*</);
-    if (nameMatch) return nameMatch[1].trim();
-
-    return 'Unknown';
-}
-
-function cleanSubject(subject) {
-    return subject
-        .replace(/^(re:|fwd:|fw:)\s*/gi, '')
-        .replace(/order\s*(confirmation|confirmed|#[A-Z0-9-]+)/gi, '')
+function cleanSubject(subj) {
+    return subj
+        .replace(/^(re:|fwd?:)\s*/gi, '')
+        .replace(/order\s*(confirm|#[A-Z0-9-]+)/gi, '')
         .replace(/your\s+(order|purchase|receipt)/gi, '')
-        .replace(/thank\s+you\s+for\s+your\s+(order|purchase)/gi, '')
-        .replace(/^\s*[-:]\s*/, '')
-        .trim()
-        .substring(0, 80) || 'Order';
+        .replace(/thank\s+you\s+for/gi, '')
+        .trim().substring(0, 60) || 'Order';
 }
 
 function getHeader(headers, name) {
-    const h = headers.find(h => h.name.toLowerCase() === name.toLowerCase());
-    return h ? h.value : null;
+    return headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value;
 }
 
-function getEmailBody(payload) {
-    let body = '';
-    if (payload.body?.data) {
-        body = decodeBase64(payload.body.data);
-    } else if (payload.parts) {
-        for (const part of payload.parts) {
-            if (part.mimeType === 'text/plain' && part.body?.data) {
-                body = decodeBase64(part.body.data);
-                break;
-            }
-            if (part.parts) {
-                for (const subpart of part.parts) {
-                    if (subpart.mimeType === 'text/plain' && subpart.body?.data) {
-                        body = decodeBase64(subpart.body.data);
-                        break;
-                    }
-                }
-            }
-        }
-        if (!body) {
-            for (const part of payload.parts) {
-                if (part.mimeType === 'text/html' && part.body?.data) {
-                    body = stripHtml(decodeBase64(part.body.data));
-                    break;
+function getBody(payload) {
+    if (payload.body?.data) return decode64(payload.body.data);
+    if (payload.parts) {
+        for (const p of payload.parts) {
+            if (p.mimeType === 'text/plain' && p.body?.data) return decode64(p.body.data);
+            if (p.parts) {
+                for (const sp of p.parts) {
+                    if (sp.mimeType === 'text/plain' && sp.body?.data) return decode64(sp.body.data);
                 }
             }
         }
     }
-    return body;
+    return '';
 }
 
-function decodeBase64(data) {
+function decode64(data) {
     try {
         return decodeURIComponent(escape(atob(data.replace(/-/g, '+').replace(/_/g, '/'))));
-    } catch (e) {
-        try {
-            return atob(data.replace(/-/g, '+').replace(/_/g, '/'));
-        } catch (e2) {
-            return '';
-        }
+    } catch {
+        try { return atob(data.replace(/-/g, '+').replace(/_/g, '/')); } catch { return ''; }
     }
 }
 
-function stripHtml(html) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    return doc.body.textContent || '';
-}
+// ============ UI ============
 
-// ============ UI FUNCTIONS ============
+function setFilter(f) {
+    currentFilter = f;
+    document.querySelectorAll('.summary-card').forEach(c => c.classList.toggle('active', c.dataset.filter === f));
 
-function setFilter(filter) {
-    currentFilter = filter;
+    const labels = { 'all': 'All Orders', 'pending': 'In Transit', 'delivered': 'Delivered' };
+    if (filterLabel) filterLabel.textContent = 'Showing: ' + labels[f];
+    clearFilterBtn?.classList.toggle('hidden', f === 'all');
 
-    // Update card highlighting
-    document.querySelectorAll('.summary-card').forEach(card => {
-        card.classList.toggle('active', card.dataset.filter === filter);
-    });
-
-    // Update filter label
-    const labels = {
-        'all': 'All Orders',
-        'pending': 'In Transit',
-        'delivered': 'Delivered'
-    };
-    if (filterLabel) filterLabel.textContent = 'Showing: ' + (labels[filter] || 'All');
-
-    // Show/hide clear button
-    if (clearFilterBtn) {
-        clearFilterBtn.classList.toggle('hidden', filter === 'all');
-    }
-
-    // Filter and display
-    if (filter === 'all') {
-        filteredOrders = [...allOrders];
-    } else if (filter === 'pending') {
-        filteredOrders = allOrders.filter(o => o.status !== 'delivered');
-    } else if (filter === 'delivered') {
-        filteredOrders = allOrders.filter(o => o.status === 'delivered');
-    }
+    filteredOrders = f === 'all' ? [...allOrders] :
+        f === 'pending' ? allOrders.filter(o => o.status !== 'delivered') :
+        allOrders.filter(o => o.status === 'delivered');
 
     displayOrders();
 }
 
 function updateSummary() {
-    const totalSpent = allOrders.reduce((sum, o) => sum + (o.amount || 0), 0);
+    const spent = allOrders.reduce((s, o) => s + (o.amount || 0), 0);
     const delivered = allOrders.filter(o => o.status === 'delivered').length;
     const pending = allOrders.filter(o => o.status !== 'delivered').length;
 
-    document.getElementById('totalSpent').textContent = '$' + totalSpent.toFixed(2);
+    document.getElementById('totalSpent').textContent = '$' + spent.toFixed(2);
     document.getElementById('totalOrders').textContent = allOrders.length;
     document.getElementById('deliveredCount').textContent = delivered;
     document.getElementById('pendingCount').textContent = pending;
@@ -666,153 +544,94 @@ function updateSummary() {
 function displayOrders() {
     if (!ordersContainer) return;
 
-    if (filteredOrders.length === 0) {
+    if (!filteredOrders.length) {
         ordersContainer.innerHTML = `
             <div class="no-orders">
                 <div class="no-orders-icon">${currentFilter === 'pending' ? '✓' : '📦'}</div>
                 <p>${currentFilter === 'pending' ? 'No pending orders!' : 'No orders found'}</p>
-            </div>
-        `;
+            </div>`;
         return;
     }
 
     // Group by date
-    const ordersByDate = {};
-    filteredOrders.forEach(order => {
-        const dateKey = order.orderDate.toISOString().split('T')[0];
-        if (!ordersByDate[dateKey]) ordersByDate[dateKey] = [];
-        ordersByDate[dateKey].push(order);
+    const byDate = {};
+    filteredOrders.forEach(o => {
+        const key = o.date.toISOString().split('T')[0];
+        if (!byDate[key]) byDate[key] = [];
+        byDate[key].push(o);
     });
 
     let html = '';
-    Object.keys(ordersByDate).sort((a, b) => new Date(b) - new Date(a)).forEach(dateKey => {
-        const orders = ordersByDate[dateKey];
-        html += `
-            <div class="date-group">
-                <div class="date-header">${formatDateHeader(dateKey)}</div>
-                ${orders.map(order => createOrderCard(order)).join('')}
-            </div>
-        `;
+    Object.keys(byDate).sort((a, b) => b.localeCompare(a)).forEach(key => {
+        const orders = byDate[key];
+        const dateLabel = formatDateHeader(key);
+        html += `<div class="date-group"><div class="date-header">${dateLabel}</div>`;
+        html += orders.map(o => orderCard(o)).join('');
+        html += '</div>';
     });
 
     ordersContainer.innerHTML = html;
-
-    // Add click handlers for expansion
-    ordersContainer.querySelectorAll('.order-card').forEach(card => {
-        card.addEventListener('click', () => card.classList.toggle('expanded'));
+    ordersContainer.querySelectorAll('.order-card').forEach(c => {
+        c.addEventListener('click', () => c.classList.toggle('expanded'));
     });
 }
 
 function formatDateHeader(dateStr) {
-    const date = new Date(dateStr + 'T12:00:00');
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-
-    if (dateStr === today.toISOString().split('T')[0]) return 'Today';
-    if (dateStr === yesterday.toISOString().split('T')[0]) return 'Yesterday';
-    return date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    const d = new Date(dateStr + 'T12:00:00');
+    const today = new Date().toISOString().split('T')[0];
+    const yest = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    if (dateStr === today) return 'Today';
+    if (dateStr === yest) return 'Yesterday';
+    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
-function createOrderCard(order) {
-    const statusColors = {
-        'delivered': '#4CAF50',
-        'shipped': '#2196F3',
-        'ordered': '#FF9800'
-    };
-    const statusIcons = {
-        'delivered': '✓',
-        'shipped': '📦',
-        'ordered': '○'
-    };
+function orderCard(o) {
+    const colors = { delivered: '#4CAF50', shipped: '#2196F3', ordered: '#FF9800' };
+    const icons = { delivered: '✓', shipped: '📦', ordered: '○' };
+    const color = colors[o.status] || '#999';
+    const icon = icons[o.status] || '○';
+    const price = o.amount > 0 ? `$${o.amount.toFixed(2)}` : '';
 
-    const statusColor = statusColors[order.status] || '#999';
-    const statusIcon = statusIcons[order.status] || '○';
-    const price = order.amount > 0 ? `$${order.amount.toFixed(2)}` : '';
-
-    // Build tracking info for pending orders
     let trackingHtml = '';
-    if (order.status !== 'delivered' && order.tracking) {
-        trackingHtml = `
-            <div class="tracking-info">
-                <span class="tracking-carrier">${order.tracking.carrier}</span>
-                <span class="tracking-number">${order.tracking.number}</span>
-            </div>
-        `;
+    if (o.status !== 'delivered' && o.tracking) {
+        trackingHtml = `<div class="tracking-info"><span class="tracking-number">${o.tracking}</span></div>`;
     }
-
-    // Build timeline
-    let timelineHtml = '<div class="order-timeline">';
-    if (order.orderDate) {
-        timelineHtml += `<div class="timeline-item">📋 Ordered: ${formatDate(order.orderDate)}</div>`;
-    }
-    if (order.paymentMethod) {
-        timelineHtml += `<div class="timeline-item">💳 Paid via ${order.paymentMethod}</div>`;
-    }
-    if (order.shipDate) {
-        timelineHtml += `<div class="timeline-item">📦 Shipped: ${formatDate(order.shipDate)}</div>`;
-    }
-    if (order.deliveryDate) {
-        timelineHtml += `<div class="timeline-item">✓ Delivered: ${formatDate(order.deliveryDate)}</div>`;
-    }
-    timelineHtml += '</div>';
 
     return `
-        <div class="order-card" data-status="${order.status}">
+        <div class="order-card" data-status="${o.status}">
             <div class="order-main">
-                <div class="order-status-icon" style="background-color: ${statusColor}">
-                    ${statusIcon}
-                </div>
+                <div class="order-status-icon" style="background:${color}">${icon}</div>
                 <div class="order-info">
-                    <div class="order-title">${escapeHtml(order.itemName)}</div>
+                    <div class="order-title">${esc(o.item)}</div>
                     <div class="order-meta">
-                        <span class="order-merchant">${escapeHtml(order.merchant)}</span>
+                        <span class="order-merchant">${esc(o.merchant)}</span>
                         ${price ? `<span class="order-price">${price}</span>` : ''}
                     </div>
                 </div>
-                <div class="order-status-label" style="color: ${statusColor}">
-                    ${order.status.charAt(0).toUpperCase() + order.status.slice(1)}
-                </div>
+                <div class="order-status-label" style="color:${color}">${o.status.charAt(0).toUpperCase() + o.status.slice(1)}</div>
             </div>
             ${trackingHtml}
             <div class="order-details">
-                ${timelineHtml}
-                ${order.orderNumber ? `<div class="order-number">Order #${order.orderNumber}</div>` : ''}
-                ${order.emails.length > 1 ? `<div class="email-count">${order.emails.length} related emails</div>` : ''}
+                <div class="timeline-item">📋 ${fmtDate(o.date)}</div>
+                ${o.shipDate ? `<div class="timeline-item">📦 Shipped ${fmtDate(o.shipDate)}</div>` : ''}
+                ${o.deliveryDate ? `<div class="timeline-item">✓ Delivered ${fmtDate(o.deliveryDate)}</div>` : ''}
+                ${o.orderNumber ? `<div class="order-number">Order #${o.orderNumber}</div>` : ''}
+                <div class="email-count">${o.emailCount} email${o.emailCount > 1 ? 's' : ''} • ${o.paymentMethod}</div>
             </div>
-        </div>
-    `;
+        </div>`;
 }
 
-function formatDate(date) {
-    if (!date) return '';
-    return new Date(date).toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: date.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined
-    });
+function fmtDate(d) {
+    if (!d) return '';
+    return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function updateLastUpdated() {
-    const el = document.getElementById('lastUpdated');
-    if (el) {
-        el.textContent = new Date().toLocaleString('en-US', {
-            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
-        });
-    }
+function esc(t) {
+    const d = document.createElement('div');
+    d.textContent = t || '';
+    return d.innerHTML;
 }
 
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text || '';
-    return div.innerHTML;
-}
-
-// Service Worker
 if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-        navigator.serviceWorker.register('service-worker.js')
-            .then(reg => console.log('SW registered'))
-            .catch(err => console.log('SW failed:', err));
-    });
+    navigator.serviceWorker.register('service-worker.js').catch(() => {});
 }

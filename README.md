@@ -126,8 +126,8 @@ Mon, Jan 20 • Presidents Day (highlighted in red)
    ```
    With your actual credentials:
    ```javascript
-   const CLIENT_ID = '457025763296-osgitgjro33vo2tcc5d2d596isroij5v.apps.googleusercontent.com';
-   const API_KEY = 'AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco';
+   const CLIENT_ID = 'YOUR_CLIENT_ID_HERE';
+   // Note: API key is not required - OAuth token is sufficient
    ```
 
 #### 2.2 Customize Calendar Filters (Optional)
@@ -308,8 +308,8 @@ iOS-apps/
 ## ⚙️ Technical Details
 
 ### API Credentials
-- **Client ID:** `457025763296-osgitgjro33vo2tcc5d2d596isroij5v.apps.googleusercontent.com`
-- **API Key:** `AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco`
+- **Client ID:** Configure in `app.js` with your own Google OAuth Client ID
+- **API Key:** Not required - OAuth token is sufficient for Calendar API
 
 ### Deployment
 - **Live URL:** https://johnzur-droid.github.io/iOS-apps/
