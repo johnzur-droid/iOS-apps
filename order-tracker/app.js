@@ -1,4 +1,4 @@
-// Order Tracker v70 - Better item extraction from order emails
+// Order Tracker v71 - 30 days, clickable tracking links
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -8,7 +8,7 @@ let pendingOrders = [];
 
 // Only check these two labels
 const LABEL_NAMES = ['STORE', 'PAYPAL'];
-const DAYS_TO_SCAN = 90;
+const DAYS_TO_SCAN = 30;
 
 // Get dismissed orders from localStorage
 function getDismissed() {
@@ -66,7 +66,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v70 - Better item extraction');
+    console.log('Order Tracker v71 - 30 days, clickable tracking');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -564,8 +564,46 @@ function cleanItem(text) {
     // Skip if it's just generic words
     if (/^(order|item|product|your|the|a|an|purchase)$/i.test(item)) return null;
 
+    // Skip tracking numbers (UPS 1Z..., USPS 9..., FedEx, etc.)
+    if (/^1Z[A-Z0-9]{16}$/i.test(item)) return null;
+    if (/^9[1-4]\d{18,22}$/.test(item)) return null;
+    if (/^\d{12,22}$/.test(item)) return null;
+
+    // Skip bad patterns: OES, single words, codes
+    if (/^OES$/i.test(item)) return null;
+    if (/^[A-Z]{2,4}[-_]?\d+$/i.test(item)) return null;  // Like "OES-123" or "AB1234"
+    if (/^[\d\s\-]+$/.test(item)) return null;  // All numbers
+
     if (item.length > 60) item = item.substring(0, 57) + '...';
     return item.length > 3 ? item : null;
+}
+
+// Generate tracking URL based on carrier
+function getTrackingUrl(tracking) {
+    if (!tracking) return null;
+
+    // UPS: starts with 1Z
+    if (/^1Z/i.test(tracking)) {
+        return `https://www.ups.com/track?tracknum=${tracking}`;
+    }
+
+    // USPS: starts with 9, typically 20-22 digits
+    if (/^9[1-4]\d{18,22}$/.test(tracking)) {
+        return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${tracking}`;
+    }
+
+    // FedEx: 12-15 digits or 20-22 digits
+    if (/^\d{12,15}$/.test(tracking) || /^\d{20,22}$/.test(tracking)) {
+        return `https://www.fedex.com/fedextrack/?trknbr=${tracking}`;
+    }
+
+    // DHL: 10 digits
+    if (/^\d{10}$/.test(tracking)) {
+        return `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${tracking}`;
+    }
+
+    // Default: try USPS (most common)
+    return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${tracking}`;
 }
 
 function extractMerchant(from, subject) {
@@ -673,6 +711,13 @@ function displayOrders() {
         const eta = o.shipDate ? calcETA(o.shipDate) : null;
         const status = o.shipDate ? 'Shipped' : 'Awaiting shipment';
 
+        // Make tracking number a clickable link
+        let trackingHtml = '';
+        if (o.tracking) {
+            const trackingUrl = getTrackingUrl(o.tracking);
+            trackingHtml = `<div class="detail"><span class="label">Tracking:</span> <a href="${trackingUrl}" target="_blank" class="tracking-link">${o.tracking}</a></div>`;
+        }
+
         html += `
             <div class="order-card" data-id="${o.id}">
                 <div class="order-header">
@@ -685,7 +730,7 @@ function displayOrders() {
                     <div class="detail"><span class="label">Ordered:</span> ${formatDate(o.orderDate)}</div>
                     <div class="detail"><span class="label">Status:</span> ${status}</div>
                     ${o.shipDate ? `<div class="detail"><span class="label">Shipped:</span> ${formatDate(o.shipDate)}</div>` : ''}
-                    ${o.tracking ? `<div class="detail"><span class="label">Tracking:</span> ${o.tracking}</div>` : ''}
+                    ${trackingHtml}
                     ${eta ? `<div class="detail"><span class="label">ETA:</span> ${eta}</div>` : ''}
                     ${o.orderNumber ? `<div class="detail"><span class="label">Order #:</span> ${o.orderNumber}</div>` : ''}
                 </div>
