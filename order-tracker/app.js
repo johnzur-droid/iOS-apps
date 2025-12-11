@@ -1,4 +1,4 @@
-// Order Tracker v67 - Simple Pending Orders Only
+// Order Tracker v68 - Fixed loading issue
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -22,7 +22,6 @@ function dismissOrder(orderId) {
         dismissed.push(orderId);
         localStorage.setItem('dismissed_orders', JSON.stringify(dismissed));
     }
-    // Remove from display
     pendingOrders = pendingOrders.filter(o => o.id !== orderId);
     displayOrders();
 }
@@ -62,7 +61,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v67 - Simple Pending Orders');
+    console.log('Order Tracker v68');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -74,9 +73,11 @@ function gapiLoaded() {
         try {
             await gapi.client.init({ discoveryDocs: [DISCOVERY_DOC] });
             gapiInited = true;
+            console.log('GAPI ready');
             maybeStart();
         } catch (e) {
-            showError('Init failed: ' + e.message);
+            console.error('GAPI init error:', e);
+            showError('Init failed: ' + (e.message || e));
         }
     });
 }
@@ -87,6 +88,7 @@ function gisLoaded() {
         client_id: CLIENT_ID, scope: SCOPES, callback: handleAuthCallback
     });
     gisInited = true;
+    console.log('GIS ready');
     maybeStart();
 }
 
@@ -106,7 +108,11 @@ function handleAuthClick() {
 }
 
 function handleAuthCallback(resp) {
-    if (resp.error) { showError('Auth failed'); return; }
+    if (resp.error) {
+        console.error('Auth error:', resp);
+        showError('Auth failed: ' + resp.error);
+        return;
+    }
     localStorage.setItem('orders_auth', 'true');
     showSection('loading');
     scanEmails();
@@ -118,11 +124,13 @@ function showSection(s) {
 }
 
 function showError(msg) {
+    console.error('Error:', msg);
     if (errorMessage) errorMessage.textContent = msg;
     showSection('error');
 }
 
 function updateProgress(msg) {
+    console.log('Progress:', msg);
     const el = document.getElementById('scanProgress');
     if (el) el.textContent = msg;
 }
@@ -143,29 +151,52 @@ async function scanEmails() {
 
         // Get labels
         updateProgress('Getting labels...');
-        const labelsResp = await gapi.client.gmail.users.labels.list({ userId: 'me' });
-        const labels = labelsResp.result.labels || [];
+        console.log('Fetching labels...');
 
-        // Search each label
+        let labels = [];
+        try {
+            const labelsResp = await gapi.client.gmail.users.labels.list({ userId: 'me' });
+            labels = labelsResp.result.labels || [];
+            console.log('Found', labels.length, 'labels');
+        } catch (e) {
+            console.error('Label fetch failed:', e);
+            // Continue without labels
+        }
+
+        // Search each label - but use message list only (faster)
         for (const labelName of LABEL_NAMES) {
             const label = labels.find(l => l.name.toUpperCase() === labelName);
             if (label) {
                 updateProgress(`Scanning ${labelName}...`);
-                const found = await fetchEmails(`label:${labelName} after:${afterDate}`);
-                found.forEach(e => allEmails.set(e.id, { ...e, source: labelName }));
+                console.log('Scanning label:', labelName);
+                try {
+                    const found = await fetchEmailsForLabel(labelName, afterDate);
+                    console.log(`Found ${found.length} emails in ${labelName}`);
+                    found.forEach(e => allEmails.set(e.id, { ...e, source: labelName }));
+                } catch (e) {
+                    console.error(`Error scanning ${labelName}:`, e);
+                }
             }
         }
 
         // Search for shipping/delivery updates
-        updateProgress('Scanning shipping updates...');
-        const updates = await fetchEmails(`(shipped OR delivered OR "tracking number") after:${afterDate}`);
-        updates.forEach(e => { if (!allEmails.has(e.id)) allEmails.set(e.id, { ...e, source: 'SEARCH' }); });
+        updateProgress('Scanning shipping...');
+        console.log('Scanning shipping/delivery...');
+        try {
+            const updates = await fetchEmailsForQuery(`(shipped OR delivered) after:${afterDate}`, 100);
+            console.log('Found', updates.length, 'shipping emails');
+            updates.forEach(e => { if (!allEmails.has(e.id)) allEmails.set(e.id, { ...e, source: 'SEARCH' }); });
+        } catch (e) {
+            console.error('Shipping scan failed:', e);
+        }
 
         updateProgress('Processing...');
         const emails = Array.from(allEmails.values());
+        console.log('Total emails:', emails.length);
 
         // Process into pending orders
         pendingOrders = processEmails(emails, dismissed);
+        console.log('Pending orders:', pendingOrders.length);
 
         updateProgress('Done!');
         if (orderCount) orderCount.textContent = pendingOrders.length;
@@ -174,30 +205,53 @@ async function scanEmails() {
         showSection('orders');
 
     } catch (e) {
-        console.error(e);
-        showError('Failed: ' + e.message);
+        console.error('Scan failed:', e);
+        showError('Failed: ' + (e.message || e));
     }
 }
 
-async function fetchEmails(query) {
+// Fetch emails with progress - limits individual message fetches
+async function fetchEmailsForLabel(labelName, afterDate) {
+    return fetchEmailsForQuery(`label:${labelName} after:${afterDate}`, 150);
+}
+
+async function fetchEmailsForQuery(query, maxEmails = 100) {
     const emails = [];
-    let pageToken = null;
 
-    do {
-        const params = { userId: 'me', q: query, maxResults: 100 };
-        if (pageToken) params.pageToken = pageToken;
+    try {
+        // Get message IDs first (fast)
+        const listResp = await gapi.client.gmail.users.messages.list({
+            userId: 'me',
+            q: query,
+            maxResults: maxEmails
+        });
 
-        const resp = await gapi.client.gmail.users.messages.list(params);
-        const msgs = resp.result.messages || [];
+        const messageIds = (listResp.result.messages || []).map(m => m.id);
+        console.log(`Query returned ${messageIds.length} message IDs`);
 
-        for (const m of msgs) {
+        // Fetch each message (slower but necessary for content)
+        let fetched = 0;
+        for (const id of messageIds) {
             try {
-                const full = await gapi.client.gmail.users.messages.get({ userId: 'me', id: m.id, format: 'full' });
-                emails.push(full.result);
-            } catch {}
+                const msg = await gapi.client.gmail.users.messages.get({
+                    userId: 'me',
+                    id: id,
+                    format: 'full'
+                });
+                emails.push(msg.result);
+                fetched++;
+
+                // Update progress every 10 messages
+                if (fetched % 10 === 0) {
+                    updateProgress(`Fetching... ${fetched}/${messageIds.length}`);
+                }
+            } catch (e) {
+                console.log('Failed to fetch message', id);
+            }
         }
-        pageToken = resp.result.nextPageToken;
-    } while (pageToken && emails.length < 400);
+    } catch (e) {
+        console.error('Query failed:', query, e);
+    }
 
     return emails;
 }
@@ -205,18 +259,17 @@ async function fetchEmails(query) {
 // ============ PROCESS ============
 
 function processEmails(rawEmails, dismissed) {
-    // Step 1: Parse all emails
     const parsed = [];
     for (const email of rawEmails) {
         const p = parseEmail(email);
         if (p) parsed.push(p);
     }
 
-    // Step 2: Separate order emails from update emails
     const orderEmails = parsed.filter(e => e.isOrder);
     const updateEmails = parsed.filter(e => e.isShipping || e.isDelivered);
 
-    // Step 3: Create orders from order emails
+    console.log(`Parsed: ${orderEmails.length} orders, ${updateEmails.length} updates`);
+
     const orders = [];
     const usedIds = new Set();
 
@@ -239,23 +292,17 @@ function processEmails(rawEmails, dismissed) {
         });
     }
 
-    // Step 4: Match updates to orders
+    // Match updates to orders
     for (const update of updateEmails) {
         const order = findOrderMatch(update, orders);
         if (order) {
-            if (update.isDelivered) {
-                order.delivered = true;
-            }
-            if (update.isShipping && !order.shipDate) {
-                order.shipDate = update.date;
-            }
-            if (update.tracking && !order.tracking) {
-                order.tracking = update.tracking;
-            }
+            if (update.isDelivered) order.delivered = true;
+            if (update.isShipping && !order.shipDate) order.shipDate = update.date;
+            if (update.tracking && !order.tracking) order.tracking = update.tracking;
         }
     }
 
-    // Step 5: Auto-mark old orders as delivered
+    // Auto-mark old orders as delivered
     const now = Date.now();
     for (const order of orders) {
         if (order.delivered) continue;
@@ -268,11 +315,9 @@ function processEmails(rawEmails, dismissed) {
         }
     }
 
-    // Step 6: Filter to only pending orders
     const pending = orders.filter(o => !o.delivered);
     pending.sort((a, b) => b.orderDate - a.orderDate);
 
-    console.log(`Found ${orders.length} orders, ${pending.length} pending`);
     return pending;
 }
 
@@ -314,17 +359,14 @@ function parseEmail(msg) {
 }
 
 function findOrderMatch(update, orders) {
-    // By order number
     if (update.orderNumber) {
         const m = orders.find(o => o.orderNumber === update.orderNumber);
         if (m) return m;
     }
-    // By tracking
     if (update.tracking) {
         const m = orders.find(o => o.tracking === update.tracking);
         if (m) return m;
     }
-    // By merchant + time window
     if (update.merchant && update.merchant !== 'Unknown') {
         const m = orders.find(o => {
             if (!merchantMatch(o.merchant, update.merchant)) return false;
@@ -471,7 +513,6 @@ function esc(t) {
     return d.innerHTML;
 }
 
-// Make dismissOrder globally accessible
 window.dismissOrder = dismissOrder;
 
 if ('serviceWorker' in navigator) {
