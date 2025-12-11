@@ -1,4 +1,4 @@
-// Order Tracker v69 - Consolidated orders, STORE & PAYPAL only
+// Order Tracker v70 - Better item extraction from order emails
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -66,7 +66,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v69 - STORE & PAYPAL only');
+    console.log('Order Tracker v70 - Better item extraction');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -340,13 +340,18 @@ function findMatchingGroup(email, groups) {
 function createOrderFromGroup(emails) {
     if (!emails.length) return null;
 
-    // Sort chronologically
+    // Sort chronologically - oldest first
     emails.sort((a, b) => a.date - b.date);
 
-    // Find best values from all emails
-    const orderEmail = emails.find(e => e.isOrder) || emails[0];
-    const deliveryEmail = emails.find(e => e.isDelivered);
-    const shippingEmail = emails.find(e => e.isShipping);
+    // Prioritize order confirmation emails (these have product names)
+    const orderEmails = emails.filter(e => e.isOrder);
+    const shippingEmails = emails.filter(e => e.isShipping);
+    const deliveryEmails = emails.filter(e => e.isDelivered);
+
+    // The base email should be the order confirmation if available
+    const orderEmail = orderEmails[0] || emails[0];
+    const deliveryEmail = deliveryEmails[0];
+    const shippingEmail = shippingEmails[0];
 
     // Get amount (highest value, likely the total)
     const amounts = emails.map(e => e.amount).filter(a => a > 0);
@@ -355,7 +360,7 @@ function createOrderFromGroup(emails) {
     // Get merchant (prefer non-Unknown, non-PayPal for actual merchant)
     let merchant = 'Unknown';
     for (const e of emails) {
-        if (e.merchant && e.merchant !== 'Unknown' && e.merchant !== 'Paypal') {
+        if (e.merchant && e.merchant !== 'Unknown' && e.merchant.toLowerCase() !== 'paypal') {
             merchant = e.merchant;
             break;
         }
@@ -368,8 +373,47 @@ function createOrderFromGroup(emails) {
     const orderNumber = emails.find(e => e.orderNumber)?.orderNumber;
     const tracking = emails.find(e => e.tracking)?.tracking;
 
-    // Get best item description
-    let item = emails.find(e => e.item && e.item !== 'Order' && e.item.length > 5)?.item;
+    // Get best item description - PRIORITIZE ORDER EMAILS
+    let item = null;
+
+    // First try: look for good item in order confirmation emails
+    for (const e of orderEmails) {
+        if (e.item && e.item !== 'Order' && e.item.length > 5) {
+            item = e.item;
+            break;
+        }
+    }
+
+    // Second try: re-extract from order email bodies (they have product names)
+    if (!item) {
+        for (const e of orderEmails) {
+            if (e.body) {
+                const extracted = extractItem(e.subject, e.body);
+                if (extracted && extracted !== 'Order' && extracted.length > 5) {
+                    item = extracted;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Third try: check shipping emails (often have "Your shipment of [product]")
+    if (!item) {
+        for (const e of shippingEmails) {
+            if (e.item && e.item !== 'Order' && e.item.length > 5) {
+                item = e.item;
+                break;
+            }
+        }
+    }
+
+    // Fourth try: any email with a good item name
+    if (!item) {
+        const goodItem = emails.find(e => e.item && e.item !== 'Order' && e.item.length > 5);
+        if (goodItem) item = goodItem.item;
+    }
+
+    // Final fallback
     if (!item) item = orderEmail.item || 'Order';
 
     // Determine status
@@ -437,7 +481,8 @@ function parseEmail(msg) {
         subject,
         from,
         date,
-        item: extractItem(subject),
+        body: body.substring(0, 2000),  // Save body for item extraction
+        item: extractItem(subject, body),
         merchant: extractMerchant(from, subject),
         amount: extractAmount(text),
         orderNumber: extractOrderNumber(text),
@@ -455,7 +500,41 @@ function isSameMerchant(m1, m2) {
 
 // ============ EXTRACTION ============
 
-function extractItem(subject) {
+function extractItem(subject, body = '') {
+    let match;
+
+    // Amazon: "Your Amazon.com order of [product]..."
+    match = subject.match(/order\s+of\s+(.{3,60}?)(?:\s+has|\s+and|\s*\.\.\.|$)/i);
+    if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+    // Quoted product name: "Your order: 'Product Name'"
+    match = subject.match(/['""']([^'""']{3,50})['""']/);
+    if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+    // "Your shipment of [product]" or "Your package of [product]"
+    match = subject.match(/(?:shipment|package)\s+of\s+(.{3,50}?)(?:\s+has|\s+is|\.\.\.|$)/i);
+    if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+    // "Item: [product]" in subject
+    match = subject.match(/item[:\s]+(.{3,50}?)(?:\s+has|\s+from|\.\.\.|$)/i);
+    if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+    // Check body for product names
+    if (body && body.length > 10) {
+        // Look for "Items Ordered: [product]" in body (Amazon)
+        match = body.match(/Items?\s+Ordered:?\s*\n?\s*(.{3,80})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // "Product: [name]" or "Item: [name]"
+        match = body.match(/(?:product|item)\s*:\s*([^\n\r]{3,60})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // "Order Details: [product]"
+        match = body.match(/order\s+details?\s*:?\s*\n?\s*([^\n\r]{3,60})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+    }
+
+    // Fall back: clean up subject by removing common phrases
     let item = subject
         .replace(/^(re:|fwd?:)\s*/gi, '')
         .replace(/order\s*(confirm|#[\w-]+)/gi, '')
@@ -464,13 +543,29 @@ function extractItem(subject) {
         .replace(/has (shipped|been delivered)/gi, '')
         .replace(/payment\s+(sent|received|confirmed)/gi, '')
         .replace(/receipt\s+(for|from)/gi, '')
+        .replace(/confirmation\s+(for|from)/gi, '')
         .trim();
 
     // Remove leading punctuation
-    item = item.replace(/^[\s\-:•]+/, '').trim();
+    item = item.replace(/^[\s\-:•|]+/, '').trim();
 
     if (item.length > 60) item = item.substring(0, 57) + '...';
     return item.length > 2 ? item : 'Order';
+}
+
+function cleanItem(text) {
+    if (!text) return null;
+    let item = text.trim()
+        .replace(/^[\s\-:•'"]+/, '')
+        .replace(/[\s\-:•'"]+$/, '')
+        .replace(/^\d+\s*x\s*/i, '')  // Remove quantity prefix like "1 x "
+        .replace(/\s+/g, ' ');  // Normalize whitespace
+
+    // Skip if it's just generic words
+    if (/^(order|item|product|your|the|a|an|purchase)$/i.test(item)) return null;
+
+    if (item.length > 60) item = item.substring(0, 57) + '...';
+    return item.length > 3 ? item : null;
 }
 
 function extractMerchant(from, subject) {
