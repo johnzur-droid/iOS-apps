@@ -1,4 +1,4 @@
-// Order Tracker v68 - Fixed loading issue
+// Order Tracker v69 - Consolidated orders, STORE & PAYPAL only
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -6,7 +6,8 @@ const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
 let tokenClient, gapiInited = false, gisInited = false;
 let pendingOrders = [];
 
-const LABEL_NAMES = ['STORE', 'PAYPAL', 'AI', 'DIVIDED WE STAND', 'BMW', 'QUALITY-WEB-TIME'];
+// Only check these two labels
+const LABEL_NAMES = ['STORE', 'PAYPAL'];
 const DAYS_TO_SCAN = 90;
 
 // Get dismissed orders from localStorage
@@ -23,6 +24,9 @@ function dismissOrder(orderId) {
         localStorage.setItem('dismissed_orders', JSON.stringify(dismissed));
     }
     pendingOrders = pendingOrders.filter(o => o.id !== orderId);
+    if (document.getElementById('orderCount')) {
+        document.getElementById('orderCount').textContent = pendingOrders.length;
+    }
     displayOrders();
 }
 
@@ -41,14 +45,15 @@ const ORDER_PATTERNS = [
     /receipt for your/i, /order #/i, /order number/i,
     /order has been (placed|received|confirmed)/i,
     /payment (received|confirmed|complete)/i,
-    /your receipt/i, /invoice/i
+    /your receipt/i
 ];
 
 const EXCLUDE_PATTERNS = [
     /password/i, /verify your email/i, /sign.?in/i, /security alert/i,
     /newsletter/i, /unsubscribe/i, /survey/i, /feedback/i,
     /rate your/i, /sale ends/i, /% off/i, /limited time/i,
-    /we miss you/i, /recommended for you/i, /account (created|updated)/i
+    /we miss you/i, /recommended for you/i, /account (created|updated)/i,
+    /tracking update/i, /your package is/i  // These are updates, not orders
 ];
 
 // DOM
@@ -61,7 +66,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v68');
+    console.log('Order Tracker v69 - STORE & PAYPAL only');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -151,8 +156,6 @@ async function scanEmails() {
 
         // Get labels
         updateProgress('Getting labels...');
-        console.log('Fetching labels...');
-
         let labels = [];
         try {
             const labelsResp = await gapi.client.gmail.users.labels.list({ userId: 'me' });
@@ -160,17 +163,16 @@ async function scanEmails() {
             console.log('Found', labels.length, 'labels');
         } catch (e) {
             console.error('Label fetch failed:', e);
-            // Continue without labels
         }
 
-        // Search each label - but use message list only (faster)
+        // Search STORE and PAYPAL labels only
         for (const labelName of LABEL_NAMES) {
             const label = labels.find(l => l.name.toUpperCase() === labelName);
             if (label) {
                 updateProgress(`Scanning ${labelName}...`);
                 console.log('Scanning label:', labelName);
                 try {
-                    const found = await fetchEmailsForLabel(labelName, afterDate);
+                    const found = await fetchEmailsForQuery(`label:${labelName} after:${afterDate}`, 200);
                     console.log(`Found ${found.length} emails in ${labelName}`);
                     found.forEach(e => allEmails.set(e.id, { ...e, source: labelName }));
                 } catch (e) {
@@ -179,15 +181,14 @@ async function scanEmails() {
             }
         }
 
-        // Search for shipping/delivery updates
-        updateProgress('Scanning shipping...');
-        console.log('Scanning shipping/delivery...');
+        // Search for delivery confirmations to mark orders as delivered
+        updateProgress('Checking deliveries...');
         try {
-            const updates = await fetchEmailsForQuery(`(shipped OR delivered) after:${afterDate}`, 100);
-            console.log('Found', updates.length, 'shipping emails');
-            updates.forEach(e => { if (!allEmails.has(e.id)) allEmails.set(e.id, { ...e, source: 'SEARCH' }); });
+            const deliveries = await fetchEmailsForQuery(`(delivered OR "has been delivered") after:${afterDate}`, 100);
+            console.log('Found', deliveries.length, 'delivery emails');
+            deliveries.forEach(e => { if (!allEmails.has(e.id)) allEmails.set(e.id, { ...e, source: 'DELIVERY' }); });
         } catch (e) {
-            console.error('Shipping scan failed:', e);
+            console.error('Delivery scan failed:', e);
         }
 
         updateProgress('Processing...');
@@ -210,38 +211,23 @@ async function scanEmails() {
     }
 }
 
-// Fetch emails with progress - limits individual message fetches
-async function fetchEmailsForLabel(labelName, afterDate) {
-    return fetchEmailsForQuery(`label:${labelName} after:${afterDate}`, 150);
-}
-
 async function fetchEmailsForQuery(query, maxEmails = 100) {
     const emails = [];
-
     try {
-        // Get message IDs first (fast)
         const listResp = await gapi.client.gmail.users.messages.list({
-            userId: 'me',
-            q: query,
-            maxResults: maxEmails
+            userId: 'me', q: query, maxResults: maxEmails
         });
-
         const messageIds = (listResp.result.messages || []).map(m => m.id);
         console.log(`Query returned ${messageIds.length} message IDs`);
 
-        // Fetch each message (slower but necessary for content)
         let fetched = 0;
         for (const id of messageIds) {
             try {
                 const msg = await gapi.client.gmail.users.messages.get({
-                    userId: 'me',
-                    id: id,
-                    format: 'full'
+                    userId: 'me', id: id, format: 'full'
                 });
                 emails.push(msg.result);
                 fetched++;
-
-                // Update progress every 10 messages
                 if (fetched % 10 === 0) {
                     updateProgress(`Fetching... ${fetched}/${messageIds.length}`);
                 }
@@ -252,73 +238,173 @@ async function fetchEmailsForQuery(query, maxEmails = 100) {
     } catch (e) {
         console.error('Query failed:', query, e);
     }
-
     return emails;
 }
 
-// ============ PROCESS ============
+// ============ PROCESS - CONSOLIDATE EMAILS INTO ORDERS ============
 
 function processEmails(rawEmails, dismissed) {
+    // Step 1: Parse all emails
     const parsed = [];
     for (const email of rawEmails) {
         const p = parseEmail(email);
         if (p) parsed.push(p);
     }
+    console.log(`Parsed ${parsed.length} relevant emails`);
 
-    const orderEmails = parsed.filter(e => e.isOrder);
-    const updateEmails = parsed.filter(e => e.isShipping || e.isDelivered);
+    // Step 2: Group emails into orders
+    // Key insight: consolidate by order number, or by amount+merchant+date
+    const orderGroups = [];
 
-    console.log(`Parsed: ${orderEmails.length} orders, ${updateEmails.length} updates`);
+    for (const email of parsed) {
+        // Skip if this is ONLY a shipping/delivery update with no order info
+        if (!email.isOrder && !email.amount && !email.orderNumber) {
+            // This is just a tracking update - try to match to existing order
+            const matchedGroup = findMatchingGroup(email, orderGroups);
+            if (matchedGroup) {
+                matchedGroup.emails.push(email);
+            }
+            continue;
+        }
 
+        // Try to find existing group for this email
+        let foundGroup = null;
+
+        // Match by order number
+        if (email.orderNumber) {
+            foundGroup = orderGroups.find(g =>
+                g.emails.some(e => e.orderNumber && e.orderNumber === email.orderNumber)
+            );
+        }
+
+        // Match by amount + merchant + date (within 3 days)
+        if (!foundGroup && email.amount > 0 && email.merchant !== 'Unknown') {
+            foundGroup = orderGroups.find(g => {
+                return g.emails.some(e => {
+                    if (!e.amount || e.merchant === 'Unknown') return false;
+                    const amountMatch = Math.abs(e.amount - email.amount) < 1.00;
+                    const merchantMatch = isSameMerchant(e.merchant, email.merchant);
+                    const dateMatch = Math.abs(e.date - email.date) < 3 * 24 * 60 * 60 * 1000;
+                    return amountMatch && merchantMatch && dateMatch;
+                });
+            });
+        }
+
+        if (foundGroup) {
+            foundGroup.emails.push(email);
+        } else {
+            // Create new order group
+            orderGroups.push({ emails: [email] });
+        }
+    }
+
+    console.log(`Grouped into ${orderGroups.length} orders`);
+
+    // Step 3: Convert groups to order objects
     const orders = [];
-    const usedIds = new Set();
-
-    for (const email of orderEmails) {
-        if (usedIds.has(email.id)) continue;
-        if (dismissed.includes(email.id)) continue;
-
-        usedIds.add(email.id);
-        orders.push({
-            id: email.id,
-            item: email.item,
-            merchant: email.merchant,
-            amount: email.amount,
-            orderDate: email.date,
-            orderNumber: email.orderNumber,
-            shipDate: null,
-            tracking: null,
-            delivered: false,
-            source: email.source
-        });
-    }
-
-    // Match updates to orders
-    for (const update of updateEmails) {
-        const order = findOrderMatch(update, orders);
-        if (order) {
-            if (update.isDelivered) order.delivered = true;
-            if (update.isShipping && !order.shipDate) order.shipDate = update.date;
-            if (update.tracking && !order.tracking) order.tracking = update.tracking;
+    for (const group of orderGroups) {
+        const order = createOrderFromGroup(group.emails);
+        if (order && !dismissed.includes(order.id)) {
+            orders.push(order);
         }
     }
 
-    // Auto-mark old orders as delivered
-    const now = Date.now();
-    for (const order of orders) {
-        if (order.delivered) continue;
-        const age = (now - order.orderDate) / (1000 * 60 * 60 * 24);
-        if (order.shipDate) {
-            const shipAge = (now - order.shipDate) / (1000 * 60 * 60 * 24);
-            if (shipAge > 7) order.delivered = true;
-        } else if (age > 10) {
-            order.delivered = true;
-        }
-    }
-
+    // Step 4: Filter to pending only
     const pending = orders.filter(o => !o.delivered);
     pending.sort((a, b) => b.orderDate - a.orderDate);
 
+    console.log(`Final: ${pending.length} pending orders`);
     return pending;
+}
+
+function findMatchingGroup(email, groups) {
+    // Try to match by tracking number
+    if (email.tracking) {
+        const match = groups.find(g => g.emails.some(e => e.tracking === email.tracking));
+        if (match) return match;
+    }
+    // Try to match by merchant within date window
+    if (email.merchant && email.merchant !== 'Unknown') {
+        const match = groups.find(g => {
+            return g.emails.some(e => {
+                if (!isSameMerchant(e.merchant, email.merchant)) return false;
+                const days = (email.date - e.date) / (1000 * 60 * 60 * 24);
+                return days >= -1 && days <= 14;
+            });
+        });
+        if (match) return match;
+    }
+    return null;
+}
+
+function createOrderFromGroup(emails) {
+    if (!emails.length) return null;
+
+    // Sort chronologically
+    emails.sort((a, b) => a.date - b.date);
+
+    // Find best values from all emails
+    const orderEmail = emails.find(e => e.isOrder) || emails[0];
+    const deliveryEmail = emails.find(e => e.isDelivered);
+    const shippingEmail = emails.find(e => e.isShipping);
+
+    // Get amount (highest value, likely the total)
+    const amounts = emails.map(e => e.amount).filter(a => a > 0);
+    const amount = amounts.length ? Math.max(...amounts) : 0;
+
+    // Get merchant (prefer non-Unknown, non-PayPal for actual merchant)
+    let merchant = 'Unknown';
+    for (const e of emails) {
+        if (e.merchant && e.merchant !== 'Unknown' && e.merchant !== 'Paypal') {
+            merchant = e.merchant;
+            break;
+        }
+    }
+    if (merchant === 'Unknown') {
+        merchant = emails.find(e => e.merchant && e.merchant !== 'Unknown')?.merchant || 'Unknown';
+    }
+
+    // Get order number and tracking
+    const orderNumber = emails.find(e => e.orderNumber)?.orderNumber;
+    const tracking = emails.find(e => e.tracking)?.tracking;
+
+    // Get best item description
+    let item = emails.find(e => e.item && e.item !== 'Order' && e.item.length > 5)?.item;
+    if (!item) item = orderEmail.item || 'Order';
+
+    // Determine status
+    let delivered = false;
+    let shipDate = shippingEmail?.date;
+    let deliveryDate = deliveryEmail?.date;
+
+    if (deliveryEmail) {
+        delivered = true;
+    } else {
+        // Auto-mark as delivered based on age
+        const now = Date.now();
+        if (shipDate) {
+            const shipAge = (now - shipDate) / (1000 * 60 * 60 * 24);
+            if (shipAge > 7) delivered = true;
+        } else {
+            const orderAge = (now - orderEmail.date) / (1000 * 60 * 60 * 24);
+            if (orderAge > 10) delivered = true;
+        }
+    }
+
+    return {
+        id: orderEmail.id,
+        item,
+        merchant,
+        amount,
+        orderDate: orderEmail.date,
+        orderNumber,
+        shipDate,
+        deliveryDate,
+        tracking,
+        delivered,
+        source: orderEmail.source,
+        emailCount: emails.length
+    };
 }
 
 function parseEmail(msg) {
@@ -334,11 +420,13 @@ function parseEmail(msg) {
     const body = getBody(msg.payload);
     const text = subject + ' ' + body;
 
+    // Determine email type
     const isFromCarrier = /(ups|usps|fedex|dhl)[\.\@]/i.test(from);
     const isDelivered = DELIVERED_PATTERNS.some(p => p.test(text));
-    const isShipping = /shipped|tracking|in transit|out for delivery/i.test(text);
+    const isShipping = !isDelivered && /shipped|tracking|in transit|out for delivery/i.test(text);
     const isOrder = !isFromCarrier && ORDER_PATTERNS.some(p => p.test(text));
 
+    // Must be relevant
     if (!isOrder && !isShipping && !isDelivered) return null;
 
     return {
@@ -350,7 +438,7 @@ function parseEmail(msg) {
         from,
         date,
         item: extractItem(subject),
-        merchant: extractMerchant(from),
+        merchant: extractMerchant(from, subject),
         amount: extractAmount(text),
         orderNumber: extractOrderNumber(text),
         tracking: extractTracking(text),
@@ -358,30 +446,10 @@ function parseEmail(msg) {
     };
 }
 
-function findOrderMatch(update, orders) {
-    if (update.orderNumber) {
-        const m = orders.find(o => o.orderNumber === update.orderNumber);
-        if (m) return m;
-    }
-    if (update.tracking) {
-        const m = orders.find(o => o.tracking === update.tracking);
-        if (m) return m;
-    }
-    if (update.merchant && update.merchant !== 'Unknown') {
-        const m = orders.find(o => {
-            if (!merchantMatch(o.merchant, update.merchant)) return false;
-            const days = (update.date - o.orderDate) / (1000 * 60 * 60 * 24);
-            return days >= -1 && days <= 14;
-        });
-        if (m) return m;
-    }
-    return null;
-}
-
-function merchantMatch(m1, m2) {
-    if (!m1 || !m2) return false;
-    const n1 = m1.toLowerCase().replace(/[^a-z]/g, '');
-    const n2 = m2.toLowerCase().replace(/[^a-z]/g, '');
+function isSameMerchant(m1, m2) {
+    if (!m1 || !m2 || m1 === 'Unknown' || m2 === 'Unknown') return false;
+    const n1 = m1.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const n2 = m2.toLowerCase().replace(/[^a-z0-9]/g, '');
     return n1 === n2 || n1.includes(n2) || n2.includes(n1);
 }
 
@@ -390,22 +458,55 @@ function merchantMatch(m1, m2) {
 function extractItem(subject) {
     let item = subject
         .replace(/^(re:|fwd?:)\s*/gi, '')
-        .replace(/order\s*(confirm|#\w+)/gi, '')
-        .replace(/your\s+(order|purchase|receipt)/gi, '')
+        .replace(/order\s*(confirm|#[\w-]+)/gi, '')
+        .replace(/your\s+(order|purchase|receipt|payment)/gi, '')
         .replace(/thank you for/gi, '')
         .replace(/has (shipped|been delivered)/gi, '')
+        .replace(/payment\s+(sent|received|confirmed)/gi, '')
+        .replace(/receipt\s+(for|from)/gi, '')
         .trim();
-    return item.length > 60 ? item.substring(0, 57) + '...' : item || 'Order';
+
+    // Remove leading punctuation
+    item = item.replace(/^[\s\-:•]+/, '').trim();
+
+    if (item.length > 60) item = item.substring(0, 57) + '...';
+    return item.length > 2 ? item : 'Order';
 }
 
-function extractMerchant(from) {
+function extractMerchant(from, subject) {
+    // Skip carriers
     if (/(ups|usps|fedex|dhl)/i.test(from)) return 'Unknown';
-    const domain = from.match(/@([^.>]+)/);
-    if (domain && !['gmail', 'yahoo', 'outlook'].includes(domain[1].toLowerCase())) {
-        return domain[1].charAt(0).toUpperCase() + domain[1].slice(1);
+
+    // Try to get domain from email
+    const domainMatch = from.match(/@([^.>]+)/);
+    if (domainMatch) {
+        const domain = domainMatch[1].toLowerCase();
+        // Skip bad domains
+        if (['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'e', 't', 'i', 'a'].includes(domain)) {
+            // Fall through to name extraction
+        } else if (domain.length > 1) {
+            return domain.charAt(0).toUpperCase() + domain.slice(1);
+        }
     }
-    const name = from.match(/^"?([^"<]+)"?\s*</);
-    if (name) return name[1].trim();
+
+    // Try display name
+    const nameMatch = from.match(/^"?([^"<]+)"?\s*</);
+    if (nameMatch) {
+        let name = nameMatch[1].trim();
+        // Skip bad names
+        if (name.length > 2 && !['mail', 'no-reply', 'noreply', 'info', 'support'].includes(name.toLowerCase())) {
+            // Limit length
+            if (name.length > 30) name = name.substring(0, 30);
+            return name;
+        }
+    }
+
+    // Try to find merchant in subject
+    const subjectMatch = subject.match(/from\s+([A-Za-z][A-Za-z0-9\s&'-]{2,20}?)(?:\s+|$|\.)/i);
+    if (subjectMatch) {
+        return subjectMatch[1].trim();
+    }
+
     return 'Unknown';
 }
 
@@ -418,7 +519,7 @@ function extractAmount(text) {
 function extractOrderNumber(text) {
     const amazon = text.match(/(\d{3}-\d{7}-\d{7})/);
     if (amazon) return amazon[1];
-    const order = text.match(/order\s*#?\s*:?\s*([A-Z0-9-]{6,20})/i);
+    const order = text.match(/order\s*#?\s*:?\s*([A-Z0-9][A-Z0-9-]{5,19})/i);
     if (order) return order[1];
     return null;
 }
@@ -475,6 +576,7 @@ function displayOrders() {
     for (const o of pendingOrders) {
         const price = o.amount > 0 ? `$${o.amount.toFixed(2)}` : '';
         const eta = o.shipDate ? calcETA(o.shipDate) : null;
+        const status = o.shipDate ? 'Shipped' : 'Awaiting shipment';
 
         html += `
             <div class="order-card" data-id="${o.id}">
@@ -486,7 +588,8 @@ function displayOrders() {
                     <div class="detail"><span class="label">From:</span> ${esc(o.merchant)}</div>
                     ${price ? `<div class="detail"><span class="label">Amount:</span> ${price}</div>` : ''}
                     <div class="detail"><span class="label">Ordered:</span> ${formatDate(o.orderDate)}</div>
-                    ${o.shipDate ? `<div class="detail"><span class="label">Shipped:</span> ${formatDate(o.shipDate)}</div>` : '<div class="detail"><span class="label">Status:</span> Awaiting shipment</div>'}
+                    <div class="detail"><span class="label">Status:</span> ${status}</div>
+                    ${o.shipDate ? `<div class="detail"><span class="label">Shipped:</span> ${formatDate(o.shipDate)}</div>` : ''}
                     ${o.tracking ? `<div class="detail"><span class="label">Tracking:</span> ${o.tracking}</div>` : ''}
                     ${eta ? `<div class="detail"><span class="label">ETA:</span> ${eta}</div>` : ''}
                     ${o.orderNumber ? `<div class="detail"><span class="label">Order #:</span> ${o.orderNumber}</div>` : ''}
