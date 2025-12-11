@@ -1,4 +1,4 @@
-// Order Tracker v71 - 30 days, clickable tracking links
+// Order Tracker v72 - Better filtering, subscription support
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -9,6 +9,16 @@ let pendingOrders = [];
 // Only check these two labels
 const LABEL_NAMES = ['STORE', 'PAYPAL'];
 const DAYS_TO_SCAN = 30;
+
+// Bad merchants to filter out
+const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown'];
+
+// Subscription keywords
+const SUBSCRIPTION_PATTERNS = [
+    /subscription/i, /membership/i, /renewal/i, /recurring/i,
+    /monthly\s+(charge|payment|fee)/i, /annual\s+(charge|payment|fee)/i,
+    /api\s+(usage|credit)/i, /billing\s+statement/i
+];
 
 // Get dismissed orders from localStorage
 function getDismissed() {
@@ -66,7 +76,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v71 - 30 days, clickable tracking');
+    console.log('Order Tracker v72 - Better filtering, subscriptions');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -435,6 +445,11 @@ function createOrderFromGroup(emails) {
         }
     }
 
+    // Detect if this is a subscription/service (not a physical item)
+    const allText = emails.map(e => e.subject + ' ' + (e.body || '')).join(' ');
+    const isSubscription = SUBSCRIPTION_PATTERNS.some(p => p.test(allText)) ||
+        /anthropic|openai|aws|azure|google cloud|digital ocean|heroku/i.test(merchant);
+
     return {
         id: orderEmail.id,
         item,
@@ -446,6 +461,7 @@ function createOrderFromGroup(emails) {
         deliveryDate,
         tracking,
         delivered,
+        isSubscription,
         source: orderEmail.source,
         emailCount: emails.length
     };
@@ -556,26 +572,39 @@ function extractItem(subject, body = '') {
 function cleanItem(text) {
     if (!text) return null;
     let item = text.trim()
-        .replace(/^[\s\-:•'"]+/, '')
+        .replace(/^[\s\-:•'"!#]+/, '')  // Remove leading punctuation including ! and #
         .replace(/[\s\-:•'"]+$/, '')
         .replace(/^\d+\s*x\s*/i, '')  // Remove quantity prefix like "1 x "
         .replace(/\s+/g, ' ');  // Normalize whitespace
 
     // Skip if it's just generic words
-    if (/^(order|item|product|your|the|a|an|purchase)$/i.test(item)) return null;
+    if (/^(order|item|product|your|the|a|an|purchase|from)$/i.test(item)) return null;
 
     // Skip tracking numbers (UPS 1Z..., USPS 9..., FedEx, etc.)
     if (/^1Z[A-Z0-9]{16}$/i.test(item)) return null;
     if (/^9[1-4]\d{18,22}$/.test(item)) return null;
     if (/^\d{12,22}$/.test(item)) return null;
 
-    // Skip bad patterns: OES, single words, codes
+    // Skip order numbers (just digits, dashes, short alphanumeric)
+    if (/^[\d\s\-#]+$/.test(item)) return null;  // All numbers/dashes
+    if (/^\d{5,}$/.test(item)) return null;  // Long number
+    if (/^#?\s*\d+$/.test(item)) return null;  // # followed by number
+
+    // Skip bad patterns: OES, codes, "from Merchant" patterns
     if (/^OES$/i.test(item)) return null;
     if (/^[A-Z]{2,4}[-_]?\d+$/i.test(item)) return null;  // Like "OES-123" or "AB1234"
-    if (/^[\d\s\-]+$/.test(item)) return null;  // All numbers
+    if (/^from\s+/i.test(item)) return null;  // "from Anthropic..."
+    if (/^your\s+[A-Z][a-z]+$/i.test(item)) return null;  // "Your Lucky Brand" (just merchant name)
+
+    // Skip if it contains "Order" + number + "Received"
+    if (/order\s+[\d\-]+\s+received/i.test(item)) return null;
+
+    // Skip very short items or items that are just a merchant name pattern
+    if (item.length < 5) return null;
+    if (/^[A-Z][a-z]+\.com$/i.test(item)) return null;  // "Amazon.com"
 
     if (item.length > 60) item = item.substring(0, 57) + '...';
-    return item.length > 3 ? item : null;
+    return item;
 }
 
 // Generate tracking URL based on carrier
@@ -615,9 +644,7 @@ function extractMerchant(from, subject) {
     if (domainMatch) {
         const domain = domainMatch[1].toLowerCase();
         // Skip bad domains
-        if (['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'e', 't', 'i', 'a'].includes(domain)) {
-            // Fall through to name extraction
-        } else if (domain.length > 1) {
+        if (!BAD_MERCHANTS.includes(domain) && domain.length > 1) {
             return domain.charAt(0).toUpperCase() + domain.slice(1);
         }
     }
@@ -626,8 +653,11 @@ function extractMerchant(from, subject) {
     const nameMatch = from.match(/^"?([^"<]+)"?\s*</);
     if (nameMatch) {
         let name = nameMatch[1].trim();
+        const nameLower = name.toLowerCase();
         // Skip bad names
-        if (name.length > 2 && !['mail', 'no-reply', 'noreply', 'info', 'support'].includes(name.toLowerCase())) {
+        if (name.length > 2 &&
+            !BAD_MERCHANTS.includes(nameLower) &&
+            !['no-reply', 'noreply', 'info', 'support', 'orders', 'shipping'].includes(nameLower)) {
             // Limit length
             if (name.length > 30) name = name.substring(0, 30);
             return name;
@@ -637,7 +667,10 @@ function extractMerchant(from, subject) {
     // Try to find merchant in subject
     const subjectMatch = subject.match(/from\s+([A-Za-z][A-Za-z0-9\s&'-]{2,20}?)(?:\s+|$|\.)/i);
     if (subjectMatch) {
-        return subjectMatch[1].trim();
+        const merchantName = subjectMatch[1].trim();
+        if (!BAD_MERCHANTS.includes(merchantName.toLowerCase())) {
+            return merchantName;
+        }
     }
 
     return 'Unknown';
@@ -658,10 +691,30 @@ function extractOrderNumber(text) {
 }
 
 function extractTracking(text) {
+    // UPS: starts with 1Z, 18 chars total
     const ups = text.match(/\b1Z[A-Z0-9]{16}\b/i);
-    if (ups) return ups[0];
+    if (ups) return ups[0].toUpperCase();
+
+    // USPS: starts with 9, 20-22 digits
     const usps = text.match(/\b9[1-4]\d{18,22}\b/);
     if (usps) return usps[0];
+
+    // FedEx: 12-15 digits or 20-22 digits
+    const fedex = text.match(/\b\d{12,15}\b/);
+    if (fedex && !text.includes(fedex[0] + '-')) return fedex[0];  // Avoid order numbers
+
+    // FedEx Door Tag: DT followed by digits
+    const fedexDT = text.match(/\bDT\d{12}\b/i);
+    if (fedexDT) return fedexDT[0].toUpperCase();
+
+    // Amazon TBA tracking
+    const tba = text.match(/\bTBA\d{12,}\b/i);
+    if (tba) return tba[0].toUpperCase();
+
+    // Generic: look for "tracking" followed by a number
+    const generic = text.match(/tracking[:\s#]+([A-Z0-9]{10,25})/i);
+    if (generic) return generic[1].toUpperCase();
+
     return null;
 }
 
@@ -708,33 +761,51 @@ function displayOrders() {
     let html = '';
     for (const o of pendingOrders) {
         const price = o.amount > 0 ? `$${o.amount.toFixed(2)}` : '';
-        const eta = o.shipDate ? calcETA(o.shipDate) : null;
-        const status = o.shipDate ? 'Shipped' : 'Awaiting shipment';
 
-        // Make tracking number a clickable link
-        let trackingHtml = '';
-        if (o.tracking) {
-            const trackingUrl = getTrackingUrl(o.tracking);
-            trackingHtml = `<div class="detail"><span class="label">Tracking:</span> <a href="${trackingUrl}" target="_blank" class="tracking-link">${o.tracking}</a></div>`;
+        // Different display for subscriptions vs physical orders
+        if (o.isSubscription) {
+            html += `
+                <div class="order-card subscription" data-id="${o.id}">
+                    <div class="order-header">
+                        <div class="order-item">${esc(o.item)} <span class="sub-badge">Subscription</span></div>
+                        <button class="dismiss-btn" onclick="event.stopPropagation(); dismissOrder('${o.id}')">✓ Done</button>
+                    </div>
+                    <div class="order-details">
+                        <div class="detail"><span class="label">From:</span> ${esc(o.merchant)}</div>
+                        ${price ? `<div class="detail"><span class="label">Amount:</span> ${price}</div>` : ''}
+                        <div class="detail"><span class="label">Date:</span> ${formatDate(o.orderDate)}</div>
+                        ${o.orderNumber ? `<div class="detail"><span class="label">Invoice #:</span> ${o.orderNumber}</div>` : ''}
+                    </div>
+                </div>`;
+        } else {
+            const eta = o.shipDate ? calcETA(o.shipDate) : null;
+            const status = o.shipDate ? 'Shipped' : 'Awaiting shipment';
+
+            // Make tracking number a clickable link
+            let trackingHtml = '';
+            if (o.tracking) {
+                const trackingUrl = getTrackingUrl(o.tracking);
+                trackingHtml = `<div class="detail"><span class="label">Tracking:</span> <a href="${trackingUrl}" target="_blank" class="tracking-link">${o.tracking}</a></div>`;
+            }
+
+            html += `
+                <div class="order-card" data-id="${o.id}">
+                    <div class="order-header">
+                        <div class="order-item">${esc(o.item)}</div>
+                        <button class="dismiss-btn" onclick="event.stopPropagation(); dismissOrder('${o.id}')">✓ Received</button>
+                    </div>
+                    <div class="order-details">
+                        <div class="detail"><span class="label">From:</span> ${esc(o.merchant)}</div>
+                        ${price ? `<div class="detail"><span class="label">Amount:</span> ${price}</div>` : ''}
+                        <div class="detail"><span class="label">Ordered:</span> ${formatDate(o.orderDate)}</div>
+                        <div class="detail"><span class="label">Status:</span> ${status}</div>
+                        ${o.shipDate ? `<div class="detail"><span class="label">Shipped:</span> ${formatDate(o.shipDate)}</div>` : ''}
+                        ${trackingHtml}
+                        ${eta ? `<div class="detail"><span class="label">ETA:</span> ${eta}</div>` : ''}
+                        ${o.orderNumber ? `<div class="detail"><span class="label">Order #:</span> ${o.orderNumber}</div>` : ''}
+                    </div>
+                </div>`;
         }
-
-        html += `
-            <div class="order-card" data-id="${o.id}">
-                <div class="order-header">
-                    <div class="order-item">${esc(o.item)}</div>
-                    <button class="dismiss-btn" onclick="event.stopPropagation(); dismissOrder('${o.id}')">✓ Received</button>
-                </div>
-                <div class="order-details">
-                    <div class="detail"><span class="label">From:</span> ${esc(o.merchant)}</div>
-                    ${price ? `<div class="detail"><span class="label">Amount:</span> ${price}</div>` : ''}
-                    <div class="detail"><span class="label">Ordered:</span> ${formatDate(o.orderDate)}</div>
-                    <div class="detail"><span class="label">Status:</span> ${status}</div>
-                    ${o.shipDate ? `<div class="detail"><span class="label">Shipped:</span> ${formatDate(o.shipDate)}</div>` : ''}
-                    ${trackingHtml}
-                    ${eta ? `<div class="detail"><span class="label">ETA:</span> ${eta}</div>` : ''}
-                    ${o.orderNumber ? `<div class="detail"><span class="label">Order #:</span> ${o.orderNumber}</div>` : ''}
-                </div>
-            </div>`;
     }
 
     ordersContainer.innerHTML = html;
