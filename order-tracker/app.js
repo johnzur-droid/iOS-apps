@@ -1,4 +1,4 @@
-// Order Tracker v72 - Better filtering, subscription support
+// Order Tracker v73 - Improved item extraction and subscription details
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -11,14 +11,17 @@ const LABEL_NAMES = ['STORE', 'PAYPAL'];
 const DAYS_TO_SCAN = 30;
 
 // Bad merchants to filter out
-const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown'];
+const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'macy\'s'];
 
 // Subscription keywords
 const SUBSCRIPTION_PATTERNS = [
     /subscription/i, /membership/i, /renewal/i, /recurring/i,
     /monthly\s+(charge|payment|fee)/i, /annual\s+(charge|payment|fee)/i,
-    /api\s+(usage|credit)/i, /billing\s+statement/i
+    /api\s+(usage|credit)/i, /billing\s+statement/i, /invoice/i
 ];
+
+// Known subscription services
+const SUBSCRIPTION_SERVICES = ['anthropic', 'openai', 'aws', 'azure', 'google cloud', 'digital ocean', 'heroku', 'netflix', 'spotify', 'adobe', 'microsoft', 'apple'];
 
 // Get dismissed orders from localStorage
 function getDismissed() {
@@ -76,7 +79,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v72 - Better filtering, subscriptions');
+    console.log('Order Tracker v73 - Better item names, subscription details');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -447,8 +450,36 @@ function createOrderFromGroup(emails) {
 
     // Detect if this is a subscription/service (not a physical item)
     const allText = emails.map(e => e.subject + ' ' + (e.body || '')).join(' ');
+    const merchantLower = merchant.toLowerCase();
     const isSubscription = SUBSCRIPTION_PATTERNS.some(p => p.test(allText)) ||
-        /anthropic|openai|aws|azure|google cloud|digital ocean|heroku/i.test(merchant);
+        SUBSCRIPTION_SERVICES.some(s => merchantLower.includes(s));
+
+    // Extract subscription details if applicable
+    let billingPeriod = null;
+    let planName = null;
+    let expirationDate = null;
+
+    if (isSubscription) {
+        // Detect billing period
+        if (/monthly|per month|\/month|\/mo/i.test(allText)) {
+            billingPeriod = 'Monthly';
+            expirationDate = new Date(orderEmail.date);
+            expirationDate.setMonth(expirationDate.getMonth() + 1);
+        } else if (/yearly|annual|per year|\/year|\/yr/i.test(allText)) {
+            billingPeriod = 'Yearly';
+            expirationDate = new Date(orderEmail.date);
+            expirationDate.setFullYear(expirationDate.getFullYear() + 1);
+        }
+
+        // Try to extract plan name
+        const planMatch = allText.match(/(?:plan|tier|subscription)[\s:]+([A-Za-z]+(?:\s+[A-Za-z]+)?)/i);
+        if (planMatch) planName = planMatch[1];
+
+        // Try API credits or usage pattern
+        if (/api|credits?|usage/i.test(allText) && !planName) {
+            planName = 'API Credits';
+        }
+    }
 
     return {
         id: orderEmail.id,
@@ -462,6 +493,9 @@ function createOrderFromGroup(emails) {
         tracking,
         delivered,
         isSubscription,
+        billingPeriod,
+        planName,
+        expirationDate,
         source: orderEmail.source,
         emailCount: emails.length
     };
@@ -535,7 +569,7 @@ function extractItem(subject, body = '') {
     match = subject.match(/item[:\s]+(.{3,50}?)(?:\s+has|\s+from|\.\.\.|$)/i);
     if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-    // Check body for product names
+    // Check body for product names - search more aggressively
     if (body && body.length > 10) {
         // Look for "Items Ordered: [product]" in body (Amazon)
         match = body.match(/Items?\s+Ordered:?\s*\n?\s*(.{3,80})/i);
@@ -545,63 +579,100 @@ function extractItem(subject, body = '') {
         match = body.match(/(?:product|item)\s*:\s*([^\n\r]{3,60})/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // "Order Details: [product]"
+        // "Order Details:" followed by product on next line
         match = body.match(/order\s+details?\s*:?\s*\n?\s*([^\n\r]{3,60})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // Look for product name patterns in body
+        match = body.match(/(?:you ordered|ordered item|purchased):\s*([^\n\r]{5,60})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // Lucky Brand / fashion specific: look for garment types
+        match = body.match(/(?:shirt|pants|jeans|dress|jacket|sweater|blouse|top|shorts|skirt|coat|boots?|shoes?|sneakers?|sandals?)[\s:]+([^\n\r]{3,40})/i);
+        if (match) { const item = cleanItem(match[0]); if (item) return item; }
+
+        // General: look for SKU/product patterns
+        match = body.match(/(?:sku|style|product\s*#?)[\s:]+([A-Z0-9-]+)\s+([^\n\r]{5,40})/i);
+        if (match && match[2]) { const item = cleanItem(match[2]); if (item) return item; }
+
+        // Look for lines with price that might be product names
+        match = body.match(/([A-Z][A-Za-z\s]{5,40})\s+\$\d+\.\d{2}/);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
     }
 
     // Fall back: clean up subject by removing common phrases
     let item = subject
         .replace(/^(re:|fwd?:)\s*/gi, '')
-        .replace(/order\s*(confirm|#[\w-]+)/gi, '')
+        .replace(/order\s*(confirm(ation)?|#[\w-]+|received)/gi, '')
         .replace(/your\s+(order|purchase|receipt|payment)/gi, '')
         .replace(/thank you for/gi, '')
         .replace(/has (shipped|been delivered)/gi, '')
         .replace(/payment\s+(sent|received|confirmed)/gi, '')
         .replace(/receipt\s+(for|from)/gi, '')
         .replace(/confirmation\s+(for|from)/gi, '')
+        .replace(/[A-Za-z]+\.com/gi, '')  // Remove domain names
         .trim();
 
     // Remove leading punctuation
     item = item.replace(/^[\s\-:•|]+/, '').trim();
 
+    // If we're left with just a merchant name or generic text, return "Order"
+    if (cleanItem(item) === null) return 'Order';
+
     if (item.length > 60) item = item.substring(0, 57) + '...';
-    return item.length > 2 ? item : 'Order';
+    return item.length > 5 ? item : 'Order';
 }
 
 function cleanItem(text) {
     if (!text) return null;
     let item = text.trim()
-        .replace(/^[\s\-:•'"!#]+/, '')  // Remove leading punctuation including ! and #
-        .replace(/[\s\-:•'"]+$/, '')
+        .replace(/^[\s\-:•'"!#@*]+/, '')  // Remove leading punctuation
+        .replace(/[\s\-:•'"!#@*]+$/, '')  // Remove trailing punctuation
         .replace(/^\d+\s*x\s*/i, '')  // Remove quantity prefix like "1 x "
         .replace(/\s+/g, ' ');  // Normalize whitespace
 
-    // Skip if it's just generic words
-    if (/^(order|item|product|your|the|a|an|purchase|from)$/i.test(item)) return null;
+    // Skip empty or very short
+    if (!item || item.length < 5) return null;
 
-    // Skip tracking numbers (UPS 1Z..., USPS 9..., FedEx, etc.)
+    // Skip if starts with punctuation/symbols followed by numbers
+    if (/^[!#@*\s]+\d+/.test(item)) return null;  // "! # 4690148251"
+    if (/^[!#@*]+/.test(item)) return null;  // Starts with symbols
+
+    // Skip if it's just generic words
+    if (/^(order|item|product|your|the|a|an|purchase|from|received)$/i.test(item)) return null;
+
+    // Skip tracking numbers
     if (/^1Z[A-Z0-9]{16}$/i.test(item)) return null;
     if (/^9[1-4]\d{18,22}$/.test(item)) return null;
     if (/^\d{12,22}$/.test(item)) return null;
+    if (/^TBA\d+$/i.test(item)) return null;
 
-    // Skip order numbers (just digits, dashes, short alphanumeric)
-    if (/^[\d\s\-#]+$/.test(item)) return null;  // All numbers/dashes
+    // Skip order/invoice numbers
+    if (/^[\d\s\-#]+$/.test(item)) return null;  // All numbers/dashes/hashes
     if (/^\d{5,}$/.test(item)) return null;  // Long number
     if (/^#?\s*\d+$/.test(item)) return null;  // # followed by number
+    if (/^\d{3}-\d{7}-\d{7}$/.test(item)) return null;  // Amazon order number
 
-    // Skip bad patterns: OES, codes, "from Merchant" patterns
-    if (/^OES$/i.test(item)) return null;
-    if (/^[A-Z]{2,4}[-_]?\d+$/i.test(item)) return null;  // Like "OES-123" or "AB1234"
-    if (/^from\s+/i.test(item)) return null;  // "from Anthropic..."
-    if (/^your\s+[A-Z][a-z]+$/i.test(item)) return null;  // "Your Lucky Brand" (just merchant name)
-
-    // Skip if it contains "Order" + number + "Received"
+    // Skip "Merchant Order XXX Received" patterns
     if (/order\s+[\d\-]+\s+received/i.test(item)) return null;
+    if (/\.com\s+order\s+[\d\-]+/i.test(item)) return null;  // "Decals.com Order 91225-563"
 
-    // Skip very short items or items that are just a merchant name pattern
-    if (item.length < 5) return null;
-    if (/^[A-Z][a-z]+\.com$/i.test(item)) return null;  // "Amazon.com"
+    // Skip "from Merchant" patterns (including with # and numbers)
+    if (/^from\s+/i.test(item)) return null;
+
+    // Skip "Your [Merchant]" patterns (just merchant name, no product)
+    if (/^your\s+[A-Za-z]+(\s+[A-Za-z]+)?$/i.test(item)) return null;  // "Your Lucky Brand"
+
+    // Skip codes and short alphanumeric patterns
+    if (/^OES$/i.test(item)) return null;
+    if (/^[A-Z]{2,5}[-_]?\d+$/i.test(item)) return null;  // "OES-123", "AB1234"
+
+    // Skip if it's just a domain/merchant name
+    if (/^[A-Z][a-z]+\.com$/i.test(item)) return null;
+    if (/^[A-Z][a-z]+\s+(Order|Receipt|Confirmation)$/i.test(item)) return null;
+
+    // Skip if it contains invoice/order number patterns as the main content
+    if (/^#\d{4,}[-\d]*$/.test(item)) return null;  // "#2178-3020-7308"
 
     if (item.length > 60) item = item.substring(0, 57) + '...';
     return item;
@@ -613,7 +684,7 @@ function getTrackingUrl(tracking) {
 
     // UPS: starts with 1Z
     if (/^1Z/i.test(tracking)) {
-        return `https://www.ups.com/track?tracknum=${tracking}`;
+        return `https://www.ups.com/track?loc=en_US&tracknum=${tracking}&requester=ST/trackdetails`;
     }
 
     // USPS: starts with 9, typically 20-22 digits
@@ -626,13 +697,18 @@ function getTrackingUrl(tracking) {
         return `https://www.fedex.com/fedextrack/?trknbr=${tracking}`;
     }
 
+    // Amazon TBA tracking - goes to Amazon
+    if (/^TBA/i.test(tracking)) {
+        return `https://www.amazon.com/gp/your-account/order-history?trackingId=${tracking}`;
+    }
+
     // DHL: 10 digits
     if (/^\d{10}$/.test(tracking)) {
         return `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${tracking}`;
     }
 
-    // Default: try USPS (most common)
-    return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${tracking}`;
+    // Default: try Google search for the tracking number
+    return `https://www.google.com/search?q=${tracking}+tracking`;
 }
 
 function extractMerchant(from, subject) {
@@ -764,16 +840,21 @@ function displayOrders() {
 
         // Different display for subscriptions vs physical orders
         if (o.isSubscription) {
+            const planInfo = o.planName || 'Service';
+            const periodInfo = o.billingPeriod ? ` (${o.billingPeriod})` : '';
+            const expiresInfo = o.expirationDate ? formatDate(o.expirationDate) : 'N/A';
+
             html += `
                 <div class="order-card subscription" data-id="${o.id}">
                     <div class="order-header">
-                        <div class="order-item">${esc(o.item)} <span class="sub-badge">Subscription</span></div>
+                        <div class="order-item">${esc(planInfo)}${periodInfo} <span class="sub-badge">Subscription</span></div>
                         <button class="dismiss-btn" onclick="event.stopPropagation(); dismissOrder('${o.id}')">✓ Done</button>
                     </div>
                     <div class="order-details">
-                        <div class="detail"><span class="label">From:</span> ${esc(o.merchant)}</div>
-                        ${price ? `<div class="detail"><span class="label">Amount:</span> ${price}</div>` : ''}
-                        <div class="detail"><span class="label">Date:</span> ${formatDate(o.orderDate)}</div>
+                        <div class="detail"><span class="label">Provider:</span> ${esc(o.merchant)}</div>
+                        ${price ? `<div class="detail"><span class="label">Amount:</span> ${price}${o.billingPeriod ? '/' + o.billingPeriod.toLowerCase().replace('ly', '') : ''}</div>` : ''}
+                        <div class="detail"><span class="label">Billed:</span> ${formatDate(o.orderDate)}</div>
+                        ${o.expirationDate ? `<div class="detail"><span class="label">Renews:</span> ${expiresInfo}</div>` : ''}
                         ${o.orderNumber ? `<div class="detail"><span class="label">Invoice #:</span> ${o.orderNumber}</div>` : ''}
                     </div>
                 </div>`;
