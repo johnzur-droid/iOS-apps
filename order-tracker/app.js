@@ -1,4 +1,4 @@
-// Order Tracker v74 - Fixed subscription detection, filter returns/CSS
+// Order Tracker v75 - Added PayPal pending, eBay order patterns
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -61,7 +61,14 @@ const ORDER_PATTERNS = [
     /receipt for your/i, /order #/i, /order number/i,
     /order has been (placed|received|confirmed)/i,
     /payment (received|confirmed|complete)/i,
-    /your receipt/i
+    /your receipt/i,
+    /payment\s+is\s+pending/i,  // PayPal pending
+    /you\s+(sent|authorized)\s+(a\s+)?payment/i,  // PayPal sent payment
+    /money\s+sent/i,  // PayPal money sent
+    /you\s+paid/i,  // PayPal you paid
+    /ebay.*order/i,  // eBay orders
+    /won\s+(the\s+)?item/i,  // eBay auction won
+    /you\s+bought/i  // eBay purchase
 ];
 
 const EXCLUDE_PATTERNS = [
@@ -84,7 +91,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v74 - Fixed subscriptions, filter returns');
+    console.log('Order Tracker v75 - PayPal pending, eBay patterns');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
