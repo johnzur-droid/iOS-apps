@@ -1,4 +1,4 @@
-// Order Tracker v73 - Improved item extraction and subscription details
+// Order Tracker v74 - Fixed subscription detection, filter returns/CSS
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -11,17 +11,20 @@ const LABEL_NAMES = ['STORE', 'PAYPAL'];
 const DAYS_TO_SCAN = 30;
 
 // Bad merchants to filter out
-const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'macy\'s'];
+const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown'];
 
-// Subscription keywords
+// Subscription keywords - must be explicit subscription terms (NOT invoice alone)
 const SUBSCRIPTION_PATTERNS = [
     /subscription/i, /membership/i, /renewal/i, /recurring/i,
-    /monthly\s+(charge|payment|fee)/i, /annual\s+(charge|payment|fee)/i,
-    /api\s+(usage|credit)/i, /billing\s+statement/i, /invoice/i
+    /monthly\s+(charge|payment|fee|plan)/i, /annual\s+(charge|payment|fee|plan)/i,
+    /api\s+(usage|credit)/i, /billing\s+period/i
 ];
 
-// Known subscription services
-const SUBSCRIPTION_SERVICES = ['anthropic', 'openai', 'aws', 'azure', 'google cloud', 'digital ocean', 'heroku', 'netflix', 'spotify', 'adobe', 'microsoft', 'apple'];
+// Known subscription services (digital services, not physical goods sellers)
+const SUBSCRIPTION_SERVICES = ['anthropic', 'openai', 'aws', 'azure', 'google cloud', 'digitalocean', 'heroku', 'netflix', 'spotify', 'adobe', 'grammarly', 'sudo', '2sudo'];
+
+// Physical goods sellers - NOT subscriptions even if they have "invoice"
+const PHYSICAL_SELLERS = ['decals', 'amazon', 'walmart', 'target', 'ebay', 'etsy', 'lucky brand', 'macys', 'nordstrom', 'kohls', 'bestbuy', 'homedepot', 'lowes'];
 
 // Get dismissed orders from localStorage
 function getDismissed() {
@@ -66,7 +69,9 @@ const EXCLUDE_PATTERNS = [
     /newsletter/i, /unsubscribe/i, /survey/i, /feedback/i,
     /rate your/i, /sale ends/i, /% off/i, /limited time/i,
     /we miss you/i, /recommended for you/i, /account (created|updated)/i,
-    /tracking update/i, /your package is/i  // These are updates, not orders
+    /tracking update/i, /your package is/i,  // These are updates, not orders
+    /return\s+(label|instructions|request)/i, /next steps for your.*return/i,  // Returns
+    /refund\s+(processed|issued|confirmed)/i  // Refunds
 ];
 
 // DOM
@@ -79,7 +84,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v73 - Better item names, subscription details');
+    console.log('Order Tracker v74 - Fixed subscriptions, filter returns');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -451,8 +456,15 @@ function createOrderFromGroup(emails) {
     // Detect if this is a subscription/service (not a physical item)
     const allText = emails.map(e => e.subject + ' ' + (e.body || '')).join(' ');
     const merchantLower = merchant.toLowerCase();
-    const isSubscription = SUBSCRIPTION_PATTERNS.some(p => p.test(allText)) ||
-        SUBSCRIPTION_SERVICES.some(s => merchantLower.includes(s));
+
+    // Check if it's a physical goods seller (NOT a subscription)
+    const isPhysicalSeller = PHYSICAL_SELLERS.some(s => merchantLower.includes(s));
+
+    // Must have subscription keywords OR be a known subscription service
+    // AND must NOT be a physical goods seller
+    const hasSubscriptionKeywords = SUBSCRIPTION_PATTERNS.some(p => p.test(allText));
+    const isKnownSubscriptionService = SUBSCRIPTION_SERVICES.some(s => merchantLower.includes(s));
+    const isSubscription = !isPhysicalSeller && (hasSubscriptionKeywords || isKnownSubscriptionService);
 
     // Extract subscription details if applicable
     let billingPeriod = null;
@@ -460,15 +472,16 @@ function createOrderFromGroup(emails) {
     let expirationDate = null;
 
     if (isSubscription) {
-        // Detect billing period
-        if (/monthly|per month|\/month|\/mo/i.test(allText)) {
-            billingPeriod = 'Monthly';
-            expirationDate = new Date(orderEmail.date);
-            expirationDate.setMonth(expirationDate.getMonth() + 1);
-        } else if (/yearly|annual|per year|\/year|\/yr/i.test(allText)) {
+        // Detect billing period - default to monthly if not specified
+        if (/yearly|annual|per year|\/year|\/yr/i.test(allText)) {
             billingPeriod = 'Yearly';
             expirationDate = new Date(orderEmail.date);
             expirationDate.setFullYear(expirationDate.getFullYear() + 1);
+        } else {
+            // Default to monthly for subscriptions
+            billingPeriod = 'Monthly';
+            expirationDate = new Date(orderEmail.date);
+            expirationDate.setMonth(expirationDate.getMonth() + 1);
         }
 
         // Try to extract plan name
@@ -478,6 +491,11 @@ function createOrderFromGroup(emails) {
         // Try API credits or usage pattern
         if (/api|credits?|usage/i.test(allText) && !planName) {
             planName = 'API Credits';
+        }
+
+        // If still no plan name, use merchant name
+        if (!planName) {
+            planName = merchant;
         }
     }
 
@@ -634,12 +652,21 @@ function cleanItem(text) {
     // Skip empty or very short
     if (!item || item.length < 5) return null;
 
+    // Skip CSS/code patterns
+    if (/[{};:].*!important/i.test(item)) return null;  // CSS with !important
+    if (/^\w+\s*:\s*\d+\s*(px|em|rem|%)/i.test(item)) return null;  // CSS properties
+    if (/^(top|left|right|bottom|margin|padding|width|height)\s*:/i.test(item)) return null;
+    if (/[<>{}]/.test(item)) return null;  // HTML/code brackets
+
     // Skip if starts with punctuation/symbols followed by numbers
     if (/^[!#@*\s]+\d+/.test(item)) return null;  // "! # 4690148251"
     if (/^[!#@*]+/.test(item)) return null;  // Starts with symbols
 
     // Skip if it's just generic words
-    if (/^(order|item|product|your|the|a|an|purchase|from|received)$/i.test(item)) return null;
+    if (/^(order|item|product|your|the|a|an|purchase|from|received|service|next\s+steps)$/i.test(item)) return null;
+
+    // Skip "Next Steps For Your" patterns
+    if (/^next\s+steps\s+for/i.test(item)) return null;
 
     // Skip tracking numbers
     if (/^1Z[A-Z0-9]{16}$/i.test(item)) return null;
@@ -662,6 +689,9 @@ function cleanItem(text) {
 
     // Skip "Your [Merchant]" patterns (just merchant name, no product)
     if (/^your\s+[A-Za-z]+(\s+[A-Za-z]+)?$/i.test(item)) return null;  // "Your Lucky Brand"
+
+    // Skip return-related patterns
+    if (/return/i.test(item) && /order|label|instructions/i.test(item)) return null;
 
     // Skip codes and short alphanumeric patterns
     if (/^OES$/i.test(item)) return null;
@@ -863,12 +893,13 @@ function displayOrders() {
             const status = o.shipDate ? 'Shipped' : 'Awaiting shipment';
 
             // Make tracking number a clickable link
-            let trackingHtml = '';
+            let trackingHtml = '<div class="detail"><span class="label">Tracking:</span> --</div>';
             if (o.tracking) {
                 const trackingUrl = getTrackingUrl(o.tracking);
                 trackingHtml = `<div class="detail"><span class="label">Tracking:</span> <a href="${trackingUrl}" target="_blank" class="tracking-link">${o.tracking}</a></div>`;
             }
 
+            // Consistent display - always show all fields
             html += `
                 <div class="order-card" data-id="${o.id}">
                     <div class="order-header">
@@ -877,13 +908,13 @@ function displayOrders() {
                     </div>
                     <div class="order-details">
                         <div class="detail"><span class="label">From:</span> ${esc(o.merchant)}</div>
-                        ${price ? `<div class="detail"><span class="label">Amount:</span> ${price}</div>` : ''}
+                        <div class="detail"><span class="label">Amount:</span> ${price || '--'}</div>
                         <div class="detail"><span class="label">Ordered:</span> ${formatDate(o.orderDate)}</div>
                         <div class="detail"><span class="label">Status:</span> ${status}</div>
-                        ${o.shipDate ? `<div class="detail"><span class="label">Shipped:</span> ${formatDate(o.shipDate)}</div>` : ''}
+                        <div class="detail"><span class="label">Shipped:</span> ${o.shipDate ? formatDate(o.shipDate) : '--'}</div>
                         ${trackingHtml}
-                        ${eta ? `<div class="detail"><span class="label">ETA:</span> ${eta}</div>` : ''}
-                        ${o.orderNumber ? `<div class="detail"><span class="label">Order #:</span> ${o.orderNumber}</div>` : ''}
+                        <div class="detail"><span class="label">ETA:</span> ${eta || '--'}</div>
+                        <div class="detail"><span class="label">Order #:</span> ${o.orderNumber || '--'}</div>
                     </div>
                 </div>`;
         }
