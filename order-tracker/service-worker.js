@@ -1,5 +1,5 @@
-// Order Tracker Service Worker v80
-const CACHE_NAME = 'order-tracker-v80';
+// Order Tracker Service Worker v81
+const CACHE_NAME = 'order-tracker-v81';
 const urlsToCache = [
     './',
     './index.html',

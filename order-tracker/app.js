@@ -1,4 +1,4 @@
-// Order Tracker v80 - Fix HTML emails, better detection
+// Order Tracker v81 - Fix PayPal merchant, better item titles
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -10,8 +10,8 @@ let pendingOrders = [];
 const LABEL_NAMES = ['STORE', 'PAYPAL'];
 const DAYS_TO_SCAN = 30;
 
-// Bad merchants to filter out
-const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown'];
+// Bad merchants to filter out - payment processors and generic names
+const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'paypal', 'members', 'notifications', 'service', 'noreply', 'no-reply', 'info', 'support', 'orders', 'shipping', 'customer'];
 
 // Subscription keywords - must be explicit subscription terms (NOT invoice alone)
 const SUBSCRIPTION_PATTERNS = [
@@ -24,7 +24,7 @@ const SUBSCRIPTION_PATTERNS = [
 const SUBSCRIPTION_SERVICES = ['anthropic', 'openai', 'aws', 'azure', 'google cloud', 'digitalocean', 'heroku', 'netflix', 'spotify', 'adobe', 'grammarly', 'sudowrite', 'sudo', '2sudo'];
 
 // Physical goods sellers - NOT subscriptions even if they have "invoice"
-const PHYSICAL_SELLERS = ['decals', 'amazon', 'walmart', 'target', 'ebay', 'etsy', 'lucky brand', 'macys', 'nordstrom', 'kohls', 'bestbuy', 'homedepot', 'lowes'];
+const PHYSICAL_SELLERS = ['decals', 'amazon', 'walmart', 'target', 'ebay', 'etsy', 'lucky brand', 'macys', 'nordstrom', 'kohls', 'bestbuy', 'homedepot', 'lowes', 'newegg', 'paypal'];
 
 // Get dismissed orders from localStorage
 function getDismissed() {
@@ -450,8 +450,25 @@ function createOrderFromGroup(emails) {
         if (goodItem) item = goodItem.item;
     }
 
-    // Final fallback
+    // Final fallback - use merchant name + "Order" if item is garbage
     if (!item) item = orderEmail.item || 'Order';
+
+    // Check if item looks like garbage (encoded strings, random chars, etc.)
+    const isGarbageItem = (text) => {
+        if (!text || text === 'Order') return true;
+        if (text.length < 4) return true;
+        // URL-encoded looking strings
+        if (/-2F|-2B|%2F|%20/.test(text)) return true;
+        // Random alphanumeric strings (no spaces, mixed case jumble)
+        if (/^[A-Za-z0-9_-]{20,}$/.test(text)) return true;
+        // Just numbers and dashes
+        if (/^[\d\s\-#]+$/.test(text)) return true;
+        return false;
+    };
+
+    if (isGarbageItem(item) && merchant !== 'Unknown') {
+        item = merchant + ' Order';
+    }
 
     // Determine status
     let delivered = false;
@@ -579,7 +596,7 @@ function parseEmail(msg) {
         date,
         body: body.substring(0, 2000),
         item: extractItem(subject, body),
-        merchant: extractMerchant(from, subject),
+        merchant: extractMerchant(from, subject, body),
         amount: extractAmount(text),
         orderNumber: extractOrderNumber(text),
         tracking: extractTracking(text),
@@ -726,32 +743,61 @@ function getTrackingUrl(tracking) {
     return `https://www.google.com/search?q=${tracking}+tracking`;
 }
 
-function extractMerchant(from, subject) {
+function extractMerchant(from, subject, body = '') {
     // Skip carriers
     if (/(ups|usps|fedex|dhl)/i.test(from)) return 'Unknown';
 
-    // Try to get domain from email
-    const domainMatch = from.match(/@([^.>]+)/);
-    if (domainMatch) {
-        const domain = domainMatch[1].toLowerCase();
-        // Skip bad domains
-        if (!BAD_MERCHANTS.includes(domain) && domain.length > 1) {
-            return domain.charAt(0).toUpperCase() + domain.slice(1);
+    // Check if sender is PayPal or other payment processor - need to find real merchant
+    const isPaymentProcessor = /paypal|venmo|zelle|cashapp/i.test(from);
+
+    // Try to get domain from email (unless it's a payment processor)
+    if (!isPaymentProcessor) {
+        const domainMatch = from.match(/@([^.>]+)/);
+        if (domainMatch) {
+            const domain = domainMatch[1].toLowerCase();
+            if (!BAD_MERCHANTS.includes(domain) && domain.length > 1) {
+                return domain.charAt(0).toUpperCase() + domain.slice(1);
+            }
+        }
+
+        // Try display name
+        const nameMatch = from.match(/^"?([^"<]+)"?\s*</);
+        if (nameMatch) {
+            let name = nameMatch[1].trim();
+            const nameLower = name.toLowerCase();
+            if (name.length > 2 && !BAD_MERCHANTS.includes(nameLower)) {
+                if (name.length > 30) name = name.substring(0, 30);
+                return name;
+            }
         }
     }
 
-    // Try display name
-    const nameMatch = from.match(/^"?([^"<]+)"?\s*</);
-    if (nameMatch) {
-        let name = nameMatch[1].trim();
-        const nameLower = name.toLowerCase();
-        // Skip bad names
-        if (name.length > 2 &&
-            !BAD_MERCHANTS.includes(nameLower) &&
-            !['no-reply', 'noreply', 'info', 'support', 'orders', 'shipping'].includes(nameLower)) {
-            // Limit length
-            if (name.length > 30) name = name.substring(0, 30);
-            return name;
+    // For PayPal or when sender is bad, look for merchant in body
+    if (body) {
+        // PayPal: "You sent $X to [Merchant]" or "Payment to [Merchant]"
+        let match = body.match(/(?:you sent|payment to|paid|sent to)\s+(?:\$[\d.,]+\s+(?:USD\s+)?to\s+)?([A-Z][A-Za-z0-9\s&'.,-]{2,30}?)(?:\s+for|\s+on|\.|,|$)/i);
+        if (match && !BAD_MERCHANTS.includes(match[1].toLowerCase().trim())) {
+            return match[1].trim();
+        }
+
+        // "Seller: [Name]" or "Shop: [Name]" or "Store: [Name]"
+        match = body.match(/(?:seller|shop|store|merchant|vendor)[:\s]+([A-Z][A-Za-z0-9\s&'.-]{2,25})/i);
+        if (match && !BAD_MERCHANTS.includes(match[1].toLowerCase().trim())) {
+            return match[1].trim();
+        }
+
+        // eBay pattern - "from [seller]"
+        match = body.match(/(?:from|sold by|shipped by)\s+([A-Za-z][A-Za-z0-9_-]{2,20})/i);
+        if (match && !BAD_MERCHANTS.includes(match[1].toLowerCase())) {
+            return match[1];
+        }
+
+        // Known retailers in body
+        const knownRetailers = ['Newegg', 'Amazon', 'Walmart', 'Target', 'eBay', 'Best Buy', 'Home Depot', 'Lowes', 'Macy\'s', 'Nordstrom'];
+        for (const retailer of knownRetailers) {
+            if (body.includes(retailer) || body.toLowerCase().includes(retailer.toLowerCase())) {
+                return retailer;
+            }
         }
     }
 
