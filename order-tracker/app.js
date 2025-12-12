@@ -1,4 +1,4 @@
-// Order Tracker v75 - Added PayPal pending, eBay order patterns
+// Order Tracker v76 - Better product extraction, fix subscriptions
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -17,11 +17,11 @@ const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 
 const SUBSCRIPTION_PATTERNS = [
     /subscription/i, /membership/i, /renewal/i, /recurring/i,
     /monthly\s+(charge|payment|fee|plan)/i, /annual\s+(charge|payment|fee|plan)/i,
-    /api\s+(usage|credit)/i, /billing\s+period/i
+    /api\s+(usage|credit)/i, /billing\s+period/i, /pro\s+plan/i
 ];
 
 // Known subscription services (digital services, not physical goods sellers)
-const SUBSCRIPTION_SERVICES = ['anthropic', 'openai', 'aws', 'azure', 'google cloud', 'digitalocean', 'heroku', 'netflix', 'spotify', 'adobe', 'grammarly', 'sudo', '2sudo'];
+const SUBSCRIPTION_SERVICES = ['anthropic', 'openai', 'aws', 'azure', 'google cloud', 'digitalocean', 'heroku', 'netflix', 'spotify', 'adobe', 'grammarly', 'sudowrite', 'sudo', '2sudo'];
 
 // Physical goods sellers - NOT subscriptions even if they have "invoice"
 const PHYSICAL_SELLERS = ['decals', 'amazon', 'walmart', 'target', 'ebay', 'etsy', 'lucky brand', 'macys', 'nordstrom', 'kohls', 'bestbuy', 'homedepot', 'lowes'];
@@ -91,7 +91,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v75 - PayPal pending, eBay patterns');
+    console.log('Order Tracker v76 - Better product extraction');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -578,6 +578,46 @@ function isSameMerchant(m1, m2) {
 function extractItem(subject, body = '') {
     let match;
 
+    // PRIORITY: Search body FIRST - it has actual product names
+    if (body && body.length > 10) {
+        // Amazon: "Items Ordered: [product]"
+        match = body.match(/Items?\s+Ordered:?\s*\n?\s*([A-Z][^\n\r$]{5,60})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // Macy's / Department stores: look for product descriptions
+        match = body.match(/(?:item|product|style)[\s:#]*\n?\s*([A-Z][A-Za-z0-9\s'-]{5,50})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // eBay: item title pattern
+        match = body.match(/(?:item\s+title|you\s+bought|won\s+item)[\s:]*\n?\s*([^\n\r]{5,60})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // Fashion/clothing: look for garment types with names
+        match = body.match(/((?:Men's|Women's|Boys'|Girls')?\s*[A-Z][A-Za-z\s'-]*(?:Sweater|Shirt|Pants|Jeans|Dress|Jacket|Coat|Top|Blouse|Skirt|Shorts|Hoodie|Cardigan|Pullover|Henley|Tee|T-Shirt)[A-Za-z\s'-]*)/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // Look for product name followed by price
+        match = body.match(/([A-Z][A-Za-z0-9\s'-]{5,45})\s+\$\d+\.\d{2}/);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // Look for quantity + product pattern: "1 x Product Name" or "Qty: 1 Product Name"
+        match = body.match(/(?:qty:?\s*\d+|^\d+\s*x)\s+([A-Z][A-Za-z0-9\s'-]{5,50})/im);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // Decals/custom products: look for design/product descriptions (NOT "Proof Approval")
+        match = body.match(/(?:design|decal|sticker|vinyl|custom)[\s:]+([A-Z][^\n\r]{5,40})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // General: "Product: Name" or "Description: Name"
+        match = body.match(/(?:product|description|item\s+name)[\s:]+([A-Z][^\n\r]{5,50})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // SKU/Style followed by product name
+        match = body.match(/(?:sku|style|item\s*#?)[\s:]+[A-Z0-9-]+\s+([A-Z][^\n\r$]{5,40})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+    }
+
+    // THEN check subject for product names
     // Amazon: "Your Amazon.com order of [product]..."
     match = subject.match(/order\s+of\s+(.{3,60}?)(?:\s+has|\s+and|\s*\.\.\.|$)/i);
     if (match) { const item = cleanItem(match[1]); if (item) return item; }
@@ -586,66 +626,12 @@ function extractItem(subject, body = '') {
     match = subject.match(/['""']([^'""']{3,50})['""']/);
     if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-    // "Your shipment of [product]" or "Your package of [product]"
+    // "Your shipment of [product]"
     match = subject.match(/(?:shipment|package)\s+of\s+(.{3,50}?)(?:\s+has|\s+is|\.\.\.|$)/i);
     if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-    // "Item: [product]" in subject
-    match = subject.match(/item[:\s]+(.{3,50}?)(?:\s+has|\s+from|\.\.\.|$)/i);
-    if (match) { const item = cleanItem(match[1]); if (item) return item; }
-
-    // Check body for product names - search more aggressively
-    if (body && body.length > 10) {
-        // Look for "Items Ordered: [product]" in body (Amazon)
-        match = body.match(/Items?\s+Ordered:?\s*\n?\s*(.{3,80})/i);
-        if (match) { const item = cleanItem(match[1]); if (item) return item; }
-
-        // "Product: [name]" or "Item: [name]"
-        match = body.match(/(?:product|item)\s*:\s*([^\n\r]{3,60})/i);
-        if (match) { const item = cleanItem(match[1]); if (item) return item; }
-
-        // "Order Details:" followed by product on next line
-        match = body.match(/order\s+details?\s*:?\s*\n?\s*([^\n\r]{3,60})/i);
-        if (match) { const item = cleanItem(match[1]); if (item) return item; }
-
-        // Look for product name patterns in body
-        match = body.match(/(?:you ordered|ordered item|purchased):\s*([^\n\r]{5,60})/i);
-        if (match) { const item = cleanItem(match[1]); if (item) return item; }
-
-        // Lucky Brand / fashion specific: look for garment types
-        match = body.match(/(?:shirt|pants|jeans|dress|jacket|sweater|blouse|top|shorts|skirt|coat|boots?|shoes?|sneakers?|sandals?)[\s:]+([^\n\r]{3,40})/i);
-        if (match) { const item = cleanItem(match[0]); if (item) return item; }
-
-        // General: look for SKU/product patterns
-        match = body.match(/(?:sku|style|product\s*#?)[\s:]+([A-Z0-9-]+)\s+([^\n\r]{5,40})/i);
-        if (match && match[2]) { const item = cleanItem(match[2]); if (item) return item; }
-
-        // Look for lines with price that might be product names
-        match = body.match(/([A-Z][A-Za-z\s]{5,40})\s+\$\d+\.\d{2}/);
-        if (match) { const item = cleanItem(match[1]); if (item) return item; }
-    }
-
-    // Fall back: clean up subject by removing common phrases
-    let item = subject
-        .replace(/^(re:|fwd?:)\s*/gi, '')
-        .replace(/order\s*(confirm(ation)?|#[\w-]+|received)/gi, '')
-        .replace(/your\s+(order|purchase|receipt|payment)/gi, '')
-        .replace(/thank you for/gi, '')
-        .replace(/has (shipped|been delivered)/gi, '')
-        .replace(/payment\s+(sent|received|confirmed)/gi, '')
-        .replace(/receipt\s+(for|from)/gi, '')
-        .replace(/confirmation\s+(for|from)/gi, '')
-        .replace(/[A-Za-z]+\.com/gi, '')  // Remove domain names
-        .trim();
-
-    // Remove leading punctuation
-    item = item.replace(/^[\s\-:•|]+/, '').trim();
-
-    // If we're left with just a merchant name or generic text, return "Order"
-    if (cleanItem(item) === null) return 'Order';
-
-    if (item.length > 60) item = item.substring(0, 57) + '...';
-    return item.length > 5 ? item : 'Order';
+    // Fall back: return "Order" - don't try to clean up garbage subjects
+    return 'Order';
 }
 
 function cleanItem(text) {
@@ -670,10 +656,13 @@ function cleanItem(text) {
     if (/^[!#@*]+/.test(item)) return null;  // Starts with symbols
 
     // Skip if it's just generic words
-    if (/^(order|item|product|your|the|a|an|purchase|from|received|service|next\s+steps)$/i.test(item)) return null;
+    if (/^(order|item|product|your|the|a|an|purchase|from|received|service|next\s+steps|proof)$/i.test(item)) return null;
 
-    // Skip "Next Steps For Your" patterns
+    // Skip garbage patterns
     if (/^next\s+steps\s+for/i.test(item)) return null;
+    if (/^proof\s+(approval|of)/i.test(item)) return null;  // "Proof Approval for..."
+    if (/^(approval|confirm|verify)/i.test(item)) return null;
+    if (/^payment\s+(is|to|for)/i.test(item)) return null;
 
     // Skip tracking numbers
     if (/^1Z[A-Z0-9]{16}$/i.test(item)) return null;
