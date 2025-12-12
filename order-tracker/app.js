@@ -1,4 +1,4 @@
-// Order Tracker v76 - Better product extraction, fix subscriptions
+// Order Tracker v77 - Much stricter item extraction to reject garbage
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -580,54 +580,54 @@ function extractItem(subject, body = '') {
 
     // PRIORITY: Search body FIRST - it has actual product names
     if (body && body.length > 10) {
-        // Amazon: "Items Ordered: [product]"
-        match = body.match(/Items?\s+Ordered:?\s*\n?\s*([A-Z][^\n\r$]{5,60})/i);
+        // Amazon: "Items Ordered: [product]" - very specific pattern
+        match = body.match(/Items?\s+Ordered:?\s*\n\s*([A-Z][A-Za-z0-9][^\n\r]{5,55})/);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // Macy's / Department stores: look for product descriptions
-        match = body.match(/(?:item|product|style)[\s:#]*\n?\s*([A-Z][A-Za-z0-9\s'-]{5,50})/i);
+        // eBay: "You bought:" or "Item:" followed by product name
+        match = body.match(/(?:You\s+bought|Item\s+title|Item\s+name)[:\s]+\n?\s*([A-Z][A-Za-z0-9][^\n\r]{8,55})/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // eBay: item title pattern
-        match = body.match(/(?:item\s+title|you\s+bought|won\s+item)[\s:]*\n?\s*([^\n\r]{5,60})/i);
+        // Fashion/clothing: look for specific garment patterns
+        match = body.match(/((?:Men's|Women's|Boys'|Girls'|Ladies')\s+[A-Z][A-Za-z\s'-]{5,40})/);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // Fashion/clothing: look for garment types with names
-        match = body.match(/((?:Men's|Women's|Boys'|Girls')?\s*[A-Z][A-Za-z\s'-]*(?:Sweater|Shirt|Pants|Jeans|Dress|Jacket|Coat|Top|Blouse|Skirt|Shorts|Hoodie|Cardigan|Pullover|Henley|Tee|T-Shirt)[A-Za-z\s'-]*)/i);
+        // Clothing items with brand + type
+        match = body.match(/([A-Z][A-Za-z]+\s+(?:Sweater|Shirt|Pants|Jeans|Dress|Jacket|Coat|Blouse|Skirt|Shorts|Hoodie|Cardigan|Pullover|Henley|T-Shirt|Polo))/);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // Look for product name followed by price
-        match = body.match(/([A-Z][A-Za-z0-9\s'-]{5,45})\s+\$\d+\.\d{2}/);
+        // Product followed by price on same line (more specific)
+        match = body.match(/^([A-Z][A-Za-z0-9][A-Za-z0-9\s'-]{5,40})\s+\$\d+\.\d{2}/m);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // Look for quantity + product pattern: "1 x Product Name" or "Qty: 1 Product Name"
-        match = body.match(/(?:qty:?\s*\d+|^\d+\s*x)\s+([A-Z][A-Za-z0-9\s'-]{5,50})/im);
+        // Quantity pattern: "1 x Product Name" or "Qty: 1 Product Name"
+        match = body.match(/(?:Qty:?\s*\d+\s*-?\s*|^\s*\d+\s+x\s+)([A-Z][A-Za-z0-9][A-Za-z0-9\s'-]{5,45})/im);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // Decals/custom products: look for design/product descriptions (NOT "Proof Approval")
-        match = body.match(/(?:design|decal|sticker|vinyl|custom)[\s:]+([A-Z][^\n\r]{5,40})/i);
+        // Decals: "Your design:" or "Design name:"
+        match = body.match(/(?:Your\s+design|Design\s+name|Decal\s+design)[:\s]+([A-Z][A-Za-z0-9][^\n\r]{5,35})/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // General: "Product: Name" or "Description: Name"
-        match = body.match(/(?:product|description|item\s+name)[\s:]+([A-Z][^\n\r]{5,50})/i);
+        // "Product Name:" pattern (more specific - requires colon)
+        match = body.match(/Product\s+Name:\s*([A-Z][A-Za-z0-9][^\n\r]{5,45})/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // SKU/Style followed by product name
-        match = body.match(/(?:sku|style|item\s*#?)[\s:]+[A-Z0-9-]+\s+([A-Z][^\n\r$]{5,40})/i);
+        // "Description:" pattern
+        match = body.match(/Description:\s*([A-Z][A-Za-z0-9][^\n\r]{5,45})/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
     }
 
     // THEN check subject for product names
     // Amazon: "Your Amazon.com order of [product]..."
-    match = subject.match(/order\s+of\s+(.{3,60}?)(?:\s+has|\s+and|\s*\.\.\.|$)/i);
+    match = subject.match(/order\s+of\s+([A-Z][A-Za-z0-9][^\.]{3,55}?)(?:\s+has|\s+and|\s*\.\.\.|$)/i);
     if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
     // Quoted product name: "Your order: 'Product Name'"
-    match = subject.match(/['""']([^'""']{3,50})['""']/);
+    match = subject.match(/['""']([A-Z][^'""']{3,45})['""']/);
     if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
     // "Your shipment of [product]"
-    match = subject.match(/(?:shipment|package)\s+of\s+(.{3,50}?)(?:\s+has|\s+is|\.\.\.|$)/i);
+    match = subject.match(/(?:shipment|package)\s+of\s+([A-Z][A-Za-z0-9][^\.]{3,45}?)(?:\s+has|\s+is|\.\.\.|$)/i);
     if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
     // Fall back: return "Order" - don't try to clean up garbage subjects
@@ -637,32 +637,62 @@ function extractItem(subject, body = '') {
 function cleanItem(text) {
     if (!text) return null;
     let item = text.trim()
-        .replace(/^[\s\-:•'"!#@*]+/, '')  // Remove leading punctuation
-        .replace(/[\s\-:•'"!#@*]+$/, '')  // Remove trailing punctuation
+        .replace(/^[\s\-:•'"!#@*=_]+/, '')  // Remove leading punctuation
+        .replace(/[\s\-:•'"!#@*=_]+$/, '')  // Remove trailing punctuation
         .replace(/^\d+\s*x\s*/i, '')  // Remove quantity prefix like "1 x "
-        .replace(/\s+/g, ' ');  // Normalize whitespace
+        .replace(/\s+/g, ' ')  // Normalize whitespace
+        .replace(/-{2,}/g, ' ')  // Replace multiple dashes with space
+        .trim();
 
     // Skip empty or very short
     if (!item || item.length < 5) return null;
 
+    // STRICT: Must start with capital letter (real product names do)
+    if (!/^[A-Z]/.test(item)) return null;
+
+    // STRICT: Reject single common words (CSS values, partial words, etc.)
+    const GARBAGE_WORDS = [
+        'normal', 'none', 'auto', 'inherit', 'initial', 'unset', 'important',
+        'true', 'false', 'null', 'undefined', 'function', 'return', 'class',
+        'order', 'item', 'product', 'your', 'the', 'from', 'received', 'service',
+        'proof', 'time', 'date', 'total', 'amount', 'price', 'cost', 'fee',
+        'status', 'pending', 'shipped', 'delivered', 'lost', 'found', 'shipment',
+        'approval', 'confirm', 'verify', 'update', 'notice', 'alert', 'info',
+        'message', 'email', 'mail', 'notification', 'receipt', 'invoice',
+        'payment', 'purchase', 'transaction', 'charge', 'billing', 'account'
+    ];
+    if (GARBAGE_WORDS.includes(item.toLowerCase())) return null;
+
+    // STRICT: Reject fragments that look like partial words (ion, tion, ing, etc.)
+    if (/^(ion|tion|ation|ing|ed|er|est|ness|ment|ive|ous|ful|less)\s/i.test(item)) return null;
+    if (/^[a-z]{1,3}\s/i.test(item) && item.length < 20) return null;  // "s in this shipment"
+
+    // STRICT: Reject if contains excessive punctuation/dashes
+    if ((item.match(/-/g) || []).length > 3) return null;  // Too many dashes
+    if ((item.match(/[_=+*#@!]/g) || []).length > 1) return null;  // Too many symbols
+
+    // STRICT: Reject sentence fragments (contains common sentence words mid-text)
+    if (/\s(in|is|was|are|were|the|this|that|for|with|from|to|of|and|or)\s/i.test(item) && item.length > 30) {
+        // This looks like a sentence, not a product name - reject unless it's a quoted product
+        if (!/^["']/.test(text)) return null;
+    }
+
     // Skip CSS/code patterns
-    if (/[{};:].*!important/i.test(item)) return null;  // CSS with !important
-    if (/^\w+\s*:\s*\d+\s*(px|em|rem|%)/i.test(item)) return null;  // CSS properties
-    if (/^(top|left|right|bottom|margin|padding|width|height)\s*:/i.test(item)) return null;
-    if (/[<>{}]/.test(item)) return null;  // HTML/code brackets
+    if (/[{};:].*!important/i.test(item)) return null;
+    if (/^\w+\s*:\s*\d+\s*(px|em|rem|%)/i.test(item)) return null;
+    if (/^(top|left|right|bottom|margin|padding|width|height|display|position|color|font|border)\s*:/i.test(item)) return null;
+    if (/[<>{}]/.test(item)) return null;
 
-    // Skip if starts with punctuation/symbols followed by numbers
-    if (/^[!#@*\s]+\d+/.test(item)) return null;  // "! # 4690148251"
-    if (/^[!#@*]+/.test(item)) return null;  // Starts with symbols
-
-    // Skip if it's just generic words
-    if (/^(order|item|product|your|the|a|an|purchase|from|received|service|next\s+steps|proof)$/i.test(item)) return null;
+    // Skip if starts with punctuation/symbols
+    if (/^[!#@*\s]+\d+/.test(item)) return null;
+    if (/^[!#@*]+/.test(item)) return null;
 
     // Skip garbage patterns
     if (/^next\s+steps\s+for/i.test(item)) return null;
-    if (/^proof\s+(approval|of)/i.test(item)) return null;  // "Proof Approval for..."
+    if (/^proof\s+(approval|of)/i.test(item)) return null;
     if (/^(approval|confirm|verify)/i.test(item)) return null;
     if (/^payment\s+(is|to|for)/i.test(item)) return null;
+    if (/production\s+time/i.test(item)) return null;
 
     // Skip tracking numbers
     if (/^1Z[A-Z0-9]{16}$/i.test(item)) return null;
@@ -671,34 +701,45 @@ function cleanItem(text) {
     if (/^TBA\d+$/i.test(item)) return null;
 
     // Skip order/invoice numbers
-    if (/^[\d\s\-#]+$/.test(item)) return null;  // All numbers/dashes/hashes
-    if (/^\d{5,}$/.test(item)) return null;  // Long number
-    if (/^#?\s*\d+$/.test(item)) return null;  // # followed by number
-    if (/^\d{3}-\d{7}-\d{7}$/.test(item)) return null;  // Amazon order number
+    if (/^[\d\s\-#]+$/.test(item)) return null;
+    if (/^\d{5,}$/.test(item)) return null;
+    if (/^#?\s*\d+$/.test(item)) return null;
+    if (/^\d{3}-\d{7}-\d{7}$/.test(item)) return null;
 
     // Skip "Merchant Order XXX Received" patterns
     if (/order\s+[\d\-]+\s+received/i.test(item)) return null;
-    if (/\.com\s+order\s+[\d\-]+/i.test(item)) return null;  // "Decals.com Order 91225-563"
+    if (/\.com\s+order\s+[\d\-]+/i.test(item)) return null;
 
-    // Skip "from Merchant" patterns (including with # and numbers)
+    // Skip "from Merchant" patterns
     if (/^from\s+/i.test(item)) return null;
 
-    // Skip "Your [Merchant]" patterns (just merchant name, no product)
-    if (/^your\s+[A-Za-z]+(\s+[A-Za-z]+)?$/i.test(item)) return null;  // "Your Lucky Brand"
+    // Skip "Your [Merchant]" patterns
+    if (/^your\s+[A-Za-z]+(\s+[A-Za-z]+)?$/i.test(item)) return null;
 
     // Skip return-related patterns
     if (/return/i.test(item) && /order|label|instructions/i.test(item)) return null;
 
     // Skip codes and short alphanumeric patterns
     if (/^OES$/i.test(item)) return null;
-    if (/^[A-Z]{2,5}[-_]?\d+$/i.test(item)) return null;  // "OES-123", "AB1234"
+    if (/^[A-Z]{2,5}[-_]?\d+$/i.test(item)) return null;
 
     // Skip if it's just a domain/merchant name
     if (/^[A-Z][a-z]+\.com$/i.test(item)) return null;
     if (/^[A-Z][a-z]+\s+(Order|Receipt|Confirmation)$/i.test(item)) return null;
 
-    // Skip if it contains invoice/order number patterns as the main content
-    if (/^#\d{4,}[-\d]*$/.test(item)) return null;  // "#2178-3020-7308"
+    // Skip if it contains invoice/order number patterns
+    if (/^#\d{4,}[-\d]*$/.test(item)) return null;
+
+    // STRICT: For short items (under 15 chars), require at least 2 words unless obvious product
+    if (item.length < 15) {
+        const words = item.split(/\s+/).filter(w => w.length > 1);
+        if (words.length < 2) {
+            // Single word - only allow if it looks like a product name (ends in common product suffixes)
+            if (!/\d/.test(item) && !/^[A-Z][a-z]+(Card|Cereal|Box|Pack|Kit|Set|Book|Case|Bag|Hat|Tee|Top|Toy)$/i.test(item)) {
+                return null;
+            }
+        }
+    }
 
     if (item.length > 60) item = item.substring(0, 57) + '...';
     return item;
