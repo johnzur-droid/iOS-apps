@@ -1,4 +1,4 @@
-// Order Tracker v77 - Much stricter item extraction to reject garbage
+// Order Tracker v78 - Balanced filtering, don't lose orders
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -637,111 +637,38 @@ function extractItem(subject, body = '') {
 function cleanItem(text) {
     if (!text) return null;
     let item = text.trim()
-        .replace(/^[\s\-:•'"!#@*=_]+/, '')  // Remove leading punctuation
-        .replace(/[\s\-:•'"!#@*=_]+$/, '')  // Remove trailing punctuation
-        .replace(/^\d+\s*x\s*/i, '')  // Remove quantity prefix like "1 x "
-        .replace(/\s+/g, ' ')  // Normalize whitespace
-        .replace(/-{2,}/g, ' ')  // Replace multiple dashes with space
+        .replace(/^[\s\-:•'"!#@*=_]+/, '')
+        .replace(/[\s\-:•'"!#@*=_]+$/, '')
+        .replace(/^\d+\s*x\s*/i, '')
+        .replace(/\s+/g, ' ')
+        .replace(/-{3,}/g, ' ')  // Only replace 3+ dashes
         .trim();
 
-    // Skip empty or very short
-    if (!item || item.length < 5) return null;
+    if (!item || item.length < 3) return null;
 
-    // STRICT: Must start with capital letter (real product names do)
-    if (!/^[A-Z]/.test(item)) return null;
+    // Only reject obvious garbage - be permissive otherwise
+    const GARBAGE = ['normal', 'none', 'auto', 'inherit', 'important', 'undefined', 'null', 'true', 'false'];
+    if (GARBAGE.includes(item.toLowerCase())) return null;
 
-    // STRICT: Reject single common words (CSS values, partial words, etc.)
-    const GARBAGE_WORDS = [
-        'normal', 'none', 'auto', 'inherit', 'initial', 'unset', 'important',
-        'true', 'false', 'null', 'undefined', 'function', 'return', 'class',
-        'order', 'item', 'product', 'your', 'the', 'from', 'received', 'service',
-        'proof', 'time', 'date', 'total', 'amount', 'price', 'cost', 'fee',
-        'status', 'pending', 'shipped', 'delivered', 'lost', 'found', 'shipment',
-        'approval', 'confirm', 'verify', 'update', 'notice', 'alert', 'info',
-        'message', 'email', 'mail', 'notification', 'receipt', 'invoice',
-        'payment', 'purchase', 'transaction', 'charge', 'billing', 'account'
-    ];
-    if (GARBAGE_WORDS.includes(item.toLowerCase())) return null;
+    // CSS/code
+    if (/!important/i.test(item)) return null;
+    if (/[{}<>]/.test(item)) return null;
+    if (/^\w+\s*:\s*\d+(px|em|rem|%)/.test(item)) return null;
 
-    // STRICT: Reject fragments that look like partial words (ion, tion, ing, etc.)
-    if (/^(ion|tion|ation|ing|ed|er|est|ness|ment|ive|ous|ful|less)\s/i.test(item)) return null;
-    if (/^[a-z]{1,3}\s/i.test(item) && item.length < 20) return null;  // "s in this shipment"
-
-    // STRICT: Reject if contains excessive punctuation/dashes
-    if ((item.match(/-/g) || []).length > 3) return null;  // Too many dashes
-    if ((item.match(/[_=+*#@!]/g) || []).length > 1) return null;  // Too many symbols
-
-    // STRICT: Reject sentence fragments (contains common sentence words mid-text)
-    if (/\s(in|is|was|are|were|the|this|that|for|with|from|to|of|and|or)\s/i.test(item) && item.length > 30) {
-        // This looks like a sentence, not a product name - reject unless it's a quoted product
-        if (!/^["']/.test(text)) return null;
-    }
-
-    // Skip CSS/code patterns
-    if (/[{};:].*!important/i.test(item)) return null;
-    if (/^\w+\s*:\s*\d+\s*(px|em|rem|%)/i.test(item)) return null;
-    if (/^(top|left|right|bottom|margin|padding|width|height|display|position|color|font|border)\s*:/i.test(item)) return null;
-    if (/[<>{}]/.test(item)) return null;
-
-    // Skip if starts with punctuation/symbols
-    if (/^[!#@*\s]+\d+/.test(item)) return null;
-    if (/^[!#@*]+/.test(item)) return null;
-
-    // Skip garbage patterns
-    if (/^next\s+steps\s+for/i.test(item)) return null;
-    if (/^proof\s+(approval|of)/i.test(item)) return null;
-    if (/^(approval|confirm|verify)/i.test(item)) return null;
-    if (/^payment\s+(is|to|for)/i.test(item)) return null;
-    if (/production\s+time/i.test(item)) return null;
-
-    // Skip tracking numbers
+    // Tracking/order numbers only
     if (/^1Z[A-Z0-9]{16}$/i.test(item)) return null;
-    if (/^9[1-4]\d{18,22}$/.test(item)) return null;
-    if (/^\d{12,22}$/.test(item)) return null;
+    if (/^9[1-4]\d{18,}$/.test(item)) return null;
+    if (/^\d{10,}$/.test(item)) return null;
     if (/^TBA\d+$/i.test(item)) return null;
-
-    // Skip order/invoice numbers
-    if (/^[\d\s\-#]+$/.test(item)) return null;
-    if (/^\d{5,}$/.test(item)) return null;
-    if (/^#?\s*\d+$/.test(item)) return null;
     if (/^\d{3}-\d{7}-\d{7}$/.test(item)) return null;
+    if (/^[\d\s\-#]+$/.test(item)) return null;
 
-    // Skip "Merchant Order XXX Received" patterns
-    if (/order\s+[\d\-]+\s+received/i.test(item)) return null;
-    if (/\.com\s+order\s+[\d\-]+/i.test(item)) return null;
+    // Obvious non-products
+    if (/^proof\s+approval/i.test(item)) return null;
+    if (/^next\s+steps/i.test(item)) return null;
+    if (/^from\s+\w+$/i.test(item)) return null;
 
-    // Skip "from Merchant" patterns
-    if (/^from\s+/i.test(item)) return null;
-
-    // Skip "Your [Merchant]" patterns
-    if (/^your\s+[A-Za-z]+(\s+[A-Za-z]+)?$/i.test(item)) return null;
-
-    // Skip return-related patterns
-    if (/return/i.test(item) && /order|label|instructions/i.test(item)) return null;
-
-    // Skip codes and short alphanumeric patterns
-    if (/^OES$/i.test(item)) return null;
-    if (/^[A-Z]{2,5}[-_]?\d+$/i.test(item)) return null;
-
-    // Skip if it's just a domain/merchant name
-    if (/^[A-Z][a-z]+\.com$/i.test(item)) return null;
-    if (/^[A-Z][a-z]+\s+(Order|Receipt|Confirmation)$/i.test(item)) return null;
-
-    // Skip if it contains invoice/order number patterns
-    if (/^#\d{4,}[-\d]*$/.test(item)) return null;
-
-    // STRICT: For short items (under 15 chars), require at least 2 words unless obvious product
-    if (item.length < 15) {
-        const words = item.split(/\s+/).filter(w => w.length > 1);
-        if (words.length < 2) {
-            // Single word - only allow if it looks like a product name (ends in common product suffixes)
-            if (!/\d/.test(item) && !/^[A-Z][a-z]+(Card|Cereal|Box|Pack|Kit|Set|Book|Case|Bag|Hat|Tee|Top|Toy)$/i.test(item)) {
-                return null;
-            }
-        }
-    }
-
-    if (item.length > 60) item = item.substring(0, 57) + '...';
+    if (item.length > 55) item = item.substring(0, 52) + '...';
     return item;
 }
 
