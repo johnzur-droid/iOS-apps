@@ -1,4 +1,4 @@
-// Order Tracker v78 - Balanced filtering, don't lose orders
+// Order Tracker v79 - Better subscription detection, debug logging
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -60,15 +60,22 @@ const ORDER_PATTERNS = [
     /thank you for your (order|purchase)/i, /purchase confirm/i,
     /receipt for your/i, /order #/i, /order number/i,
     /order has been (placed|received|confirmed)/i,
-    /payment (received|confirmed|complete)/i,
-    /your receipt/i,
+    /payment (received|confirmed|complete|successful)/i,
+    /your receipt/i, /receipt from/i,
     /payment\s+is\s+pending/i,  // PayPal pending
     /you\s+(sent|authorized)\s+(a\s+)?payment/i,  // PayPal sent payment
     /money\s+sent/i,  // PayPal money sent
     /you\s+paid/i,  // PayPal you paid
     /ebay.*order/i,  // eBay orders
     /won\s+(the\s+)?item/i,  // eBay auction won
-    /you\s+bought/i  // eBay purchase
+    /you\s+bought/i,  // eBay purchase
+    /invoice/i,  // Subscription invoices
+    /billing\s+(statement|summary|notification)/i,  // Billing
+    /charge\s+(to|for|of)/i,  // Credit card charges
+    /successfully\s+(charged|processed|renewed)/i,  // Renewals
+    /subscription\s+(started|renewed|confirmed)/i,  // Subscriptions
+    /your\s+\w+\s+subscription/i,  // "Your X subscription"
+    /api\s+(usage|credits?)/i  // API billing
 ];
 
 const EXCLUDE_PATTERNS = [
@@ -538,15 +545,24 @@ function parseEmail(msg) {
 
     const body = getBody(msg.payload);
     const text = subject + ' ' + body;
+    const fromLower = from.toLowerCase();
+
+    // Check if from a known subscription service - auto-treat as order
+    const isFromSubscriptionService = SUBSCRIPTION_SERVICES.some(s => fromLower.includes(s));
 
     // Determine email type
     const isFromCarrier = /(ups|usps|fedex|dhl)[\.\@]/i.test(from);
     const isDelivered = DELIVERED_PATTERNS.some(p => p.test(text));
     const isShipping = !isDelivered && /shipped|tracking|in transit|out for delivery/i.test(text);
-    const isOrder = !isFromCarrier && ORDER_PATTERNS.some(p => p.test(text));
+    const isOrder = !isFromCarrier && (ORDER_PATTERNS.some(p => p.test(text)) || isFromSubscriptionService);
 
     // Must be relevant
-    if (!isOrder && !isShipping && !isDelivered) return null;
+    if (!isOrder && !isShipping && !isDelivered) {
+        console.log('SKIPPED (no match):', subject.substring(0, 50), '| From:', from.substring(0, 30));
+        return null;
+    }
+
+    console.log('FOUND:', isOrder ? 'ORDER' : isShipping ? 'SHIPPING' : 'DELIVERED', '|', subject.substring(0, 50));
 
     return {
         id: msg.id,
@@ -556,7 +572,7 @@ function parseEmail(msg) {
         subject,
         from,
         date,
-        body: body.substring(0, 2000),  // Save body for item extraction
+        body: body.substring(0, 2000),
         item: extractItem(subject, body),
         merchant: extractMerchant(from, subject),
         amount: extractAmount(text),
