@@ -1,4 +1,4 @@
-// Order Tracker v79 - Better subscription detection, debug logging
+// Order Tracker v80 - Fix HTML emails, better detection
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -56,7 +56,8 @@ const DELIVERED_PATTERNS = [
 ];
 
 const ORDER_PATTERNS = [
-    /order confirm/i, /order received/i, /thanks for your order/i,
+    /order\s+(is\s+)?confirm/i,  // "order confirmed", "order is confirmed"
+    /order received/i, /thanks for your order/i,
     /thank you for your (order|purchase)/i, /purchase confirm/i,
     /receipt for your/i, /order #/i, /order number/i,
     /order has been (placed|received|confirmed)/i,
@@ -66,6 +67,8 @@ const ORDER_PATTERNS = [
     /you\s+(sent|authorized)\s+(a\s+)?payment/i,  // PayPal sent payment
     /money\s+sent/i,  // PayPal money sent
     /you\s+paid/i,  // PayPal you paid
+    /your order is/i,  // "your order is confirmed", "your order is on the way"
+    /order update/i,  // eBay "Order update:"
     /ebay.*order/i,  // eBay orders
     /won\s+(the\s+)?item/i,  // eBay auction won
     /you\s+bought/i,  // eBay purchase
@@ -75,15 +78,17 @@ const ORDER_PATTERNS = [
     /successfully\s+(charged|processed|renewed)/i,  // Renewals
     /subscription\s+(started|renewed|confirmed)/i,  // Subscriptions
     /your\s+\w+\s+subscription/i,  // "Your X subscription"
-    /api\s+(usage|credits?)/i  // API billing
+    /api\s+(usage|credits?)/i,  // API billing
+    /newegg.*order/i,  // Newegg
+    /walmart.*order/i,  // Walmart
+    /amazon.*order/i  // Amazon
 ];
 
 const EXCLUDE_PATTERNS = [
     /password/i, /verify your email/i, /sign.?in/i, /security alert/i,
-    /newsletter/i, /unsubscribe/i, /survey/i, /feedback/i,
-    /rate your/i, /sale ends/i, /% off/i, /limited time/i,
+    /newsletter/i, /survey/i, /feedback/i,
     /we miss you/i, /recommended for you/i, /account (created|updated)/i,
-    /tracking update/i, /your package is/i,  // These are updates, not orders
+    /tracking update/i,  // These are updates, not orders
     /return\s+(label|instructions|request)/i, /next steps for your.*return/i,  // Returns
     /refund\s+(processed|issued|confirmed)/i  // Refunds
 ];
@@ -809,19 +814,55 @@ function getHeader(headers, name) {
 }
 
 function getBody(payload) {
-    let body = '';
-    if (payload.body?.data) body += decode64(payload.body.data);
+    let text = '';
+    let html = '';
+
+    // Direct body
+    if (payload.body?.data) {
+        const decoded = decode64(payload.body.data);
+        if (payload.mimeType === 'text/html') html = decoded;
+        else text = decoded;
+    }
+
+    // Multipart
     if (payload.parts) {
         for (const p of payload.parts) {
-            if (p.mimeType === 'text/plain' && p.body?.data) body += decode64(p.body.data);
+            if (p.body?.data) {
+                const decoded = decode64(p.body.data);
+                if (p.mimeType === 'text/plain') text += decoded;
+                if (p.mimeType === 'text/html') html += decoded;
+            }
             if (p.parts) {
                 for (const sp of p.parts) {
-                    if (sp.mimeType === 'text/plain' && sp.body?.data) body += decode64(sp.body.data);
+                    if (sp.body?.data) {
+                        const decoded = decode64(sp.body.data);
+                        if (sp.mimeType === 'text/plain') text += decoded;
+                        if (sp.mimeType === 'text/html') html += decoded;
+                    }
                 }
             }
         }
     }
-    return body.substring(0, 5000);
+
+    // Prefer plain text, fall back to stripped HTML
+    if (text.length > 50) return text.substring(0, 5000);
+    if (html) {
+        // Strip HTML tags to get text content
+        const stripped = html
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/\s+/g, ' ')
+            .trim();
+        return stripped.substring(0, 5000);
+    }
+    return text.substring(0, 5000);
 }
 
 function decode64(data) {
