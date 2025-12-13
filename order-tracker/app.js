@@ -1,4 +1,4 @@
-// Order Tracker v81 - Fix PayPal merchant, better item titles
+// Order Tracker v82 - Fix merchant extraction, better deduplication
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -747,7 +747,44 @@ function extractMerchant(from, subject, body = '') {
     // Skip carriers
     if (/(ups|usps|fedex|dhl)/i.test(from)) return 'Unknown';
 
-    // Check if sender is PayPal or other payment processor - need to find real merchant
+    // FIRST: Check for known retailers in sender or body - most reliable
+    const knownRetailers = [
+        { pattern: /newegg/i, name: 'Newegg' },
+        { pattern: /amazon/i, name: 'Amazon' },
+        { pattern: /walmart/i, name: 'Walmart' },
+        { pattern: /target\.com|target\s/i, name: 'Target' },
+        { pattern: /ebay/i, name: 'eBay' },
+        { pattern: /best\s*buy/i, name: 'Best Buy' },
+        { pattern: /home\s*depot/i, name: 'Home Depot' },
+        { pattern: /lowes/i, name: 'Lowes' },
+        { pattern: /macy/i, name: "Macy's" },
+        { pattern: /nordstrom/i, name: 'Nordstrom' },
+        { pattern: /dick'?s\s*sporting/i, name: "Dick's Sporting Goods" },
+        { pattern: /kohls/i, name: "Kohl's" },
+        { pattern: /etsy/i, name: 'Etsy' },
+        { pattern: /decals\.com|decals\s/i, name: 'Decals.com' },
+        { pattern: /grammarly/i, name: 'Grammarly' },
+        { pattern: /sudowrite/i, name: 'Sudowrite' },
+        { pattern: /anthropic/i, name: 'Anthropic' }
+    ];
+
+    // Check sender first
+    for (const { pattern, name } of knownRetailers) {
+        if (pattern.test(from)) return name;
+    }
+
+    // Check subject
+    for (const { pattern, name } of knownRetailers) {
+        if (pattern.test(subject)) return name;
+    }
+
+    // Check body (only first 500 chars to avoid false matches in footers)
+    const bodyStart = body.substring(0, 500);
+    for (const { pattern, name } of knownRetailers) {
+        if (pattern.test(bodyStart)) return name;
+    }
+
+    // Check if sender is PayPal - need to find real merchant from body
     const isPaymentProcessor = /paypal|venmo|zelle|cashapp/i.test(from);
 
     // Try to get domain from email (unless it's a payment processor)
@@ -755,62 +792,60 @@ function extractMerchant(from, subject, body = '') {
         const domainMatch = from.match(/@([^.>]+)/);
         if (domainMatch) {
             const domain = domainMatch[1].toLowerCase();
-            if (!BAD_MERCHANTS.includes(domain) && domain.length > 1) {
+            if (!BAD_MERCHANTS.includes(domain) && domain.length > 2) {
                 return domain.charAt(0).toUpperCase() + domain.slice(1);
             }
         }
 
-        // Try display name
+        // Try display name (but filter out garbage)
         const nameMatch = from.match(/^"?([^"<]+)"?\s*</);
         if (nameMatch) {
             let name = nameMatch[1].trim();
             const nameLower = name.toLowerCase();
-            if (name.length > 2 && !BAD_MERCHANTS.includes(nameLower)) {
-                if (name.length > 30) name = name.substring(0, 30);
+            // Skip if contains garbage patterns
+            if (name.length > 2 && name.length < 30 &&
+                !BAD_MERCHANTS.includes(nameLower) &&
+                !/https?:/i.test(name) &&
+                !/\d+\s*months?/i.test(name) &&
+                !/commerce\s*inc/i.test(name) &&
+                !/^by\s/i.test(name)) {
                 return name;
             }
         }
     }
 
-    // For PayPal or when sender is bad, look for merchant in body
-    if (body) {
-        // PayPal: "You sent $X to [Merchant]" or "Payment to [Merchant]"
-        let match = body.match(/(?:you sent|payment to|paid|sent to)\s+(?:\$[\d.,]+\s+(?:USD\s+)?to\s+)?([A-Z][A-Za-z0-9\s&'.,-]{2,30}?)(?:\s+for|\s+on|\.|,|$)/i);
-        if (match && !BAD_MERCHANTS.includes(match[1].toLowerCase().trim())) {
+    // For PayPal, try to find merchant in body with strict patterns
+    if (isPaymentProcessor && body) {
+        // PayPal: "You sent $X.XX USD to [Merchant]"
+        let match = body.match(/sent\s+\$[\d.,]+\s+USD\s+to\s+([A-Z][A-Za-z0-9\s&'.-]{2,25})/i);
+        if (match && isValidMerchant(match[1])) {
             return match[1].trim();
-        }
-
-        // "Seller: [Name]" or "Shop: [Name]" or "Store: [Name]"
-        match = body.match(/(?:seller|shop|store|merchant|vendor)[:\s]+([A-Z][A-Za-z0-9\s&'.-]{2,25})/i);
-        if (match && !BAD_MERCHANTS.includes(match[1].toLowerCase().trim())) {
-            return match[1].trim();
-        }
-
-        // eBay pattern - "from [seller]"
-        match = body.match(/(?:from|sold by|shipped by)\s+([A-Za-z][A-Za-z0-9_-]{2,20})/i);
-        if (match && !BAD_MERCHANTS.includes(match[1].toLowerCase())) {
-            return match[1];
-        }
-
-        // Known retailers in body
-        const knownRetailers = ['Newegg', 'Amazon', 'Walmart', 'Target', 'eBay', 'Best Buy', 'Home Depot', 'Lowes', 'Macy\'s', 'Nordstrom'];
-        for (const retailer of knownRetailers) {
-            if (body.includes(retailer) || body.toLowerCase().includes(retailer.toLowerCase())) {
-                return retailer;
-            }
         }
     }
 
     // Try to find merchant in subject
     const subjectMatch = subject.match(/from\s+([A-Za-z][A-Za-z0-9\s&'-]{2,20}?)(?:\s+|$|\.)/i);
-    if (subjectMatch) {
-        const merchantName = subjectMatch[1].trim();
-        if (!BAD_MERCHANTS.includes(merchantName.toLowerCase())) {
-            return merchantName;
-        }
+    if (subjectMatch && isValidMerchant(subjectMatch[1])) {
+        return subjectMatch[1].trim();
     }
 
     return 'Unknown';
+}
+
+// Helper to check if merchant name is valid (not garbage)
+function isValidMerchant(name) {
+    if (!name) return false;
+    const cleaned = name.trim().toLowerCase();
+    if (cleaned.length < 2 || cleaned.length > 30) return false;
+    if (BAD_MERCHANTS.includes(cleaned)) return false;
+    // Reject garbage patterns
+    if (/https?:/i.test(name)) return false;
+    if (/\d+\s*months?/i.test(name)) return false;
+    if (/in\s*full/i.test(name)) return false;
+    if (/commerce\s*inc/i.test(name)) return false;
+    if (/^by\s/i.test(name)) return false;
+    if (/confirmed|shipped|delivered/i.test(name)) return false;
+    return true;
 }
 
 function extractAmount(text) {
