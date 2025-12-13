@@ -1,4 +1,4 @@
-// Order Tracker v84 - Fix consolidation, longer auto-delivery window
+// Order Tracker v85 - Filter garbage orders, better validation
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -11,7 +11,7 @@ const LABEL_NAMES = ['STORE', 'PAYPAL'];
 const DAYS_TO_SCAN = 30;
 
 // Bad merchants to filter out - payment processors and generic names
-const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'paypal', 'members', 'notifications', 'service', 'noreply', 'no-reply', 'info', 'support', 'orders', 'shipping', 'customer'];
+const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'paypal', 'members', 'notifications', 'service', 'noreply', 'no-reply', 'info', 'support', 'orders', 'shipping', 'customer', 'john zur', 'subtotal', 'thescarfgiraffe', 'martinsbike', 'lightwerkz', 'valleywellnessnj'];
 
 // Subscription keywords - must be explicit subscription terms (NOT invoice alone)
 const SUBSCRIPTION_PATTERNS = [
@@ -24,7 +24,7 @@ const SUBSCRIPTION_PATTERNS = [
 const SUBSCRIPTION_SERVICES = ['anthropic', 'openai', 'aws', 'azure', 'google cloud', 'digitalocean', 'heroku', 'netflix', 'spotify', 'adobe', 'grammarly', 'sudowrite', 'sudo', '2sudo'];
 
 // Physical goods sellers - NOT subscriptions even if they have "invoice"
-const PHYSICAL_SELLERS = ['decals', 'amazon', 'walmart', 'target', 'ebay', 'etsy', 'lucky brand', 'macys', 'nordstrom', 'kohls', 'bestbuy', 'homedepot', 'lowes', 'newegg', 'paypal'];
+const PHYSICAL_SELLERS = ['decals', 'amazon', 'walmart', 'target', 'ebay', 'etsy', 'lucky brand', 'macys', 'nordstrom', 'kohls', 'bestbuy', 'homedepot', 'lowes', 'newegg', 'paypal', 'costco', 'dicks', 'the shed', 'theshed'];
 
 // Get dismissed orders from localStorage
 function getDismissed() {
@@ -478,6 +478,9 @@ function createOrderFromGroup(emails) {
         if (/^[A-Za-z0-9_-]{20,}$/.test(text)) return true;
         // Just numbers and dashes
         if (/^[\d\s\-#]+$/.test(text)) return true;
+        // Common garbage words that get extracted as item names
+        const garbageWords = ['subtotal', 'shipping', 'total', 'confirmed', 'confirmation', 'status', 'summary', 'information', 'update', 'notification'];
+        if (garbageWords.includes(text.toLowerCase())) return true;
         return false;
     };
 
@@ -870,10 +873,19 @@ function extractAmount(text) {
 }
 
 function extractOrderNumber(text) {
+    // Amazon order numbers
     const amazon = text.match(/(\d{3}-\d{7}-\d{7})/);
     if (amazon) return amazon[1];
+
+    // General order numbers - but filter out garbage
     const order = text.match(/order\s*#?\s*:?\s*([A-Z0-9][A-Z0-9-]{5,19})/i);
-    if (order) return order[1];
+    if (order) {
+        const num = order[1];
+        // Reject common garbage that gets matched as order numbers
+        const garbage = ['confirmed', 'confirmation', 'shipped', 'shipping', 'delivered', 'delivery', 'status', 'summary', 'number', 'information', 'tracking', 'update'];
+        if (garbage.includes(num.toLowerCase())) return null;
+        return num;
+    }
     return null;
 }
 
@@ -898,9 +910,16 @@ function extractTracking(text) {
     const tba = text.match(/\bTBA\d{12,}\b/i);
     if (tba) return tba[0].toUpperCase();
 
-    // Generic: look for "tracking" followed by a number
+    // Generic: look for "tracking" followed by a number - but validate
     const generic = text.match(/tracking[:\s#]+([A-Z0-9]{10,25})/i);
-    if (generic) return generic[1].toUpperCase();
+    if (generic) {
+        const track = generic[1].toUpperCase();
+        // Reject garbage that looks like tracking but isn't
+        const garbage = ['INFORMATION', 'UNAVAILABLE', 'AVAILABLE', 'PENDING', 'PROCESSING'];
+        if (!garbage.includes(track) && /\d/.test(track)) {
+            return track;
+        }
+    }
 
     return null;
 }
