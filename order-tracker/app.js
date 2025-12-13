@@ -1,4 +1,4 @@
-// Order Tracker v90 - Better amount extraction (prefer totals over item prices)
+// Order Tracker v91 - Skip FREE items, skip savings amounts, extract real ETA from emails
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -432,9 +432,12 @@ function createOrderFromGroup(emails) {
         merchant = emails.find(e => e.merchant && e.merchant !== 'Unknown')?.merchant || 'Unknown';
     }
 
-    // Get order number and tracking
+    // Get order number, tracking, and expected delivery
     const orderNumber = emails.find(e => e.orderNumber)?.orderNumber;
     const tracking = emails.find(e => e.tracking)?.tracking;
+    // Get expected delivery date - prefer from shipping emails, then any email
+    const expectedDelivery = shippingEmails.find(e => e.expectedDelivery)?.expectedDelivery
+        || emails.find(e => e.expectedDelivery)?.expectedDelivery;
 
     // Get best item description - PRIORITIZE ORDER EMAILS
     let item = null;
@@ -594,6 +597,7 @@ function createOrderFromGroup(emails) {
         shipDate,
         deliveryDate,
         tracking,
+        expectedDelivery,
         delivered,
         isSubscription,
         billingPeriod,
@@ -649,6 +653,7 @@ function parseEmail(msg) {
         amount: extractAmount(text),
         orderNumber: extractOrderNumber(text),
         tracking: extractTracking(text),
+        expectedDelivery: extractExpectedDelivery(text),
         source: msg.source
     };
 }
@@ -736,6 +741,11 @@ function cleanItem(text) {
     // Only reject obvious garbage - be permissive otherwise
     const GARBAGE = ['normal', 'none', 'auto', 'inherit', 'important', 'undefined', 'null', 'true', 'false'];
     if (GARBAGE.includes(item.toLowerCase())) return null;
+
+    // Skip FREE/promotional items - we want the paid item
+    if (/^free\b/i.test(item)) return null;
+    if (/\bfree\s+(gift|item|bonus|sample)\b/i.test(item)) return null;
+    if (/\$0\.00/.test(item)) return null;
 
     // CSS/code
     if (/!important/i.test(item)) return null;
@@ -898,22 +908,30 @@ function isValidMerchant(name) {
 }
 
 function extractAmount(text) {
+    // Remove savings/discount amounts from consideration (they're not what was paid)
+    // Replace them with placeholder so they don't get picked up
+    let cleanText = text
+        .replace(/(?:you\s+)?sav(?:e|ed|ings)[:\s]*\$[\d,]+\.\d{2}/gi, 'SAVINGS_REMOVED')
+        .replace(/discount[:\s]*-?\$[\d,]+\.\d{2}/gi, 'DISCOUNT_REMOVED')
+        .replace(/(?:member\s+)?savings[:\s]*-?\$[\d,]+\.\d{2}/gi, 'SAVINGS_REMOVED');
+
     // First, try to find amount near "total" (order total, grand total, etc.)
-    const totalMatch = text.match(/(?:order\s+)?(?:grand\s+)?total[:\s]*\$?([\d,]+\.\d{2})/i);
+    // But NOT "savings total" or "discount total"
+    const totalMatch = cleanText.match(/(?:order\s+)?(?:grand\s+)?total[:\s]*\$?([\d,]+\.\d{2})/i);
     if (totalMatch) {
         const amount = parseFloat(totalMatch[1].replace(/,/g, ''));
         if (amount > 1 && amount < 50000) return amount;
     }
 
     // Also try "Amount" or "Charged" patterns
-    const chargedMatch = text.match(/(?:amount|charged|paid|payment)[:\s]*\$?([\d,]+\.\d{2})/i);
+    const chargedMatch = cleanText.match(/(?:amount\s+(?:due|charged)|charged|you\s+paid|payment\s+total)[:\s]*\$?([\d,]+\.\d{2})/i);
     if (chargedMatch) {
         const amount = parseFloat(chargedMatch[1].replace(/,/g, ''));
         if (amount > 1 && amount < 50000) return amount;
     }
 
     // Fall back to finding all amounts and using most common (not max)
-    const matches = text.match(/\$[\d,]+\.\d{2}/g) || [];
+    const matches = cleanText.match(/\$[\d,]+\.\d{2}/g) || [];
     const amounts = matches.map(m => parseFloat(m.replace(/[$,]/g, ''))).filter(a => a > 1 && a < 50000);
     if (amounts.length === 0) return 0;
 
@@ -980,6 +998,39 @@ function extractTracking(text) {
         }
     }
 
+    return null;
+}
+
+function extractExpectedDelivery(text) {
+    // Common patterns for expected delivery dates
+    const patterns = [
+        // "arriving by Dec 15" or "arrives Dec 15"
+        /(?:arriv(?:ing|es?|al)|expected|estimated)\s+(?:by\s+)?([A-Z][a-z]{2,8}\s+\d{1,2}(?:,?\s+\d{4})?)/i,
+        // "delivery by December 15" or "delivered by Dec 15"
+        /(?:deliver(?:y|ed)?)\s+(?:by\s+)?([A-Z][a-z]{2,8}\s+\d{1,2}(?:,?\s+\d{4})?)/i,
+        // "by Friday, Dec 15"
+        /by\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+([A-Z][a-z]{2,8}\s+\d{1,2})/i,
+        // "Dec 15 - Dec 17" (range - use end date)
+        /([A-Z][a-z]{2,8}\s+\d{1,2})\s*[-–]\s*([A-Z][a-z]{2,8}\s+\d{1,2})/i,
+        // "12/15" or "12/15/2024"
+        /(?:arriv|deliver|expected|by)[:\s]+(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)/i
+    ];
+
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match) {
+            // For range patterns, use the second date (end of range)
+            const dateStr = match[2] || match[1];
+            const parsed = new Date(dateStr);
+            // If year not specified and date is in past, assume next year
+            if (!isNaN(parsed.getTime())) {
+                if (parsed < new Date() && !dateStr.includes('202')) {
+                    parsed.setFullYear(parsed.getFullYear() + 1);
+                }
+                return parsed;
+            }
+        }
+    }
     return null;
 }
 
@@ -1084,7 +1135,9 @@ function displayOrders() {
                     </div>
                 </div>`;
         } else {
-            const eta = o.shipDate ? calcETA(o.shipDate) : null;
+            // Use extracted expected delivery date if available, otherwise calculate from ship date
+            const eta = o.expectedDelivery ? formatDate(o.expectedDelivery)
+                : (o.shipDate ? calcETA(o.shipDate) : null);
             const status = o.shipDate ? 'Shipped' : 'Awaiting shipment';
 
             // Make tracking number a clickable link
