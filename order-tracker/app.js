@@ -1,4 +1,4 @@
-// Order Tracker v91 - Skip FREE items, skip savings amounts, extract real ETA from emails
+// Order Tracker v92 - Better item extraction (skip $0.00 items), better delivery detection
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -52,7 +52,12 @@ const DELIVERED_PATTERNS = [
     /successfully delivered/i, /delivery complete/i, /delivered on/i,
     /delivered to/i, /left at/i, /signed for/i, /proof of delivery/i,
     /your (package|order|item) (has |was )?(arrived|delivered)/i,
-    /picked up (at|from)/i
+    /picked up (at|from)/i,
+    /delivery confirmed/i, /item delivered/i, /order delivered/i,
+    /we delivered/i, /just delivered/i, /now delivered/i,
+    /arrived today/i, /has arrived/i, /out for delivery.*delivered/i,
+    /thank you for your order.*delivered/i,
+    /your delivery is complete/i, /dropoff complete/i
 ];
 
 const ORDER_PATTERNS = [
@@ -505,6 +510,11 @@ function createOrderFromGroup(emails) {
         item = merchant + ' Order';
     }
 
+    // If item is still garbage and merchant is Unknown, this is a junk order
+    if (isGarbageItem(item) && merchant === 'Unknown') {
+        return null;
+    }
+
     // Determine status
     let delivered = false;
     let shipDate = shippingEmail?.date;
@@ -672,40 +682,57 @@ function extractItem(subject, body = '') {
 
     // PRIORITY: Search body FIRST - it has actual product names
     if (body && body.length > 10) {
+        // First, remove FREE items and $0.00 items from consideration
+        // Replace them so they don't get matched
+        let cleanBody = body
+            .replace(/^.*\$0\.00.*$/gm, '')  // Remove lines with $0.00
+            .replace(/^.*FREE.*$/gmi, '')     // Remove lines with FREE
+            .replace(/^.*\bfree\b.*$/gmi, ''); // Remove lines with "free" word
+
+        // Newegg/electronics: Product with price pattern - find items with real prices
+        // Look for "Product Name ... $XX.XX" but NOT $0.00
+        const priceLines = cleanBody.match(/^([A-Z][A-Za-z0-9][A-Za-z0-9\s,.'"-]{5,50})\s+\$[1-9]\d*\.\d{2}/gm);
+        if (priceLines && priceLines.length > 0) {
+            // Get the first item with a real price
+            const firstPriceLine = priceLines[0];
+            match = firstPriceLine.match(/^([A-Z][A-Za-z0-9][A-Za-z0-9\s,.'"-]{5,50})\s+\$/);
+            if (match) { const item = cleanItem(match[1]); if (item) return item; }
+        }
+
         // Amazon: "Items Ordered: [product]" - very specific pattern
-        match = body.match(/Items?\s+Ordered:?\s*\n\s*([A-Z][A-Za-z0-9][^\n\r]{5,55})/);
+        match = cleanBody.match(/Items?\s+Ordered:?\s*\n\s*([A-Z][A-Za-z0-9][^\n\r]{5,55})/);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
         // eBay: "You bought:" or "Item:" followed by product name
-        match = body.match(/(?:You\s+bought|Item\s+title|Item\s+name)[:\s]+\n?\s*([A-Z][A-Za-z0-9][^\n\r]{8,55})/i);
+        match = cleanBody.match(/(?:You\s+bought|Item\s+title|Item\s+name)[:\s]+\n?\s*([A-Z][A-Za-z0-9][^\n\r]{8,55})/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
         // Fashion/clothing: look for specific garment patterns
-        match = body.match(/((?:Men's|Women's|Boys'|Girls'|Ladies')\s+[A-Z][A-Za-z\s'-]{5,40})/);
+        match = cleanBody.match(/((?:Men's|Women's|Boys'|Girls'|Ladies')\s+[A-Z][A-Za-z\s'-]{5,40})/);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
         // Clothing items with brand + type
-        match = body.match(/([A-Z][A-Za-z]+\s+(?:Sweater|Shirt|Pants|Jeans|Dress|Jacket|Coat|Blouse|Skirt|Shorts|Hoodie|Cardigan|Pullover|Henley|T-Shirt|Polo))/);
+        match = cleanBody.match(/([A-Z][A-Za-z]+\s+(?:Sweater|Shirt|Pants|Jeans|Dress|Jacket|Coat|Blouse|Skirt|Shorts|Hoodie|Cardigan|Pullover|Henley|T-Shirt|Polo))/);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // Product followed by price on same line (more specific)
-        match = body.match(/^([A-Z][A-Za-z0-9][A-Za-z0-9\s'-]{5,40})\s+\$\d+\.\d{2}/m);
+        // Electronics: RAM, SSD, GPU, CPU patterns
+        match = cleanBody.match(/([A-Z][A-Za-z0-9\s-]*(?:RAM|DDR[45]|SSD|HDD|GPU|CPU|GB|TB|MHz)[A-Za-z0-9\s-]*)/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
         // Quantity pattern: "1 x Product Name" or "Qty: 1 Product Name"
-        match = body.match(/(?:Qty:?\s*\d+\s*-?\s*|^\s*\d+\s+x\s+)([A-Z][A-Za-z0-9][A-Za-z0-9\s'-]{5,45})/im);
+        match = cleanBody.match(/(?:Qty:?\s*\d+\s*-?\s*|^\s*\d+\s+x\s+)([A-Z][A-Za-z0-9][A-Za-z0-9\s'-]{5,45})/im);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
         // Decals: "Your design:" or "Design name:"
-        match = body.match(/(?:Your\s+design|Design\s+name|Decal\s+design)[:\s]+([A-Z][A-Za-z0-9][^\n\r]{5,35})/i);
+        match = cleanBody.match(/(?:Your\s+design|Design\s+name|Decal\s+design)[:\s]+([A-Z][A-Za-z0-9][^\n\r]{5,35})/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
         // "Product Name:" pattern (more specific - requires colon)
-        match = body.match(/Product\s+Name:\s*([A-Z][A-Za-z0-9][^\n\r]{5,45})/i);
+        match = cleanBody.match(/Product\s+Name:\s*([A-Z][A-Za-z0-9][^\n\r]{5,45})/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
         // "Description:" pattern
-        match = body.match(/Description:\s*([A-Z][A-Za-z0-9][^\n\r]{5,45})/i);
+        match = cleanBody.match(/Description:\s*([A-Z][A-Za-z0-9][^\n\r]{5,45})/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
     }
 
@@ -803,10 +830,9 @@ function getTrackingUrl(tracking) {
 }
 
 function extractMerchant(from, subject, body = '') {
-    // Skip carriers
-    if (/(ups|usps|fedex|dhl)/i.test(from)) return 'Unknown';
+    const isCarrier = /(ups|usps|fedex|dhl)/i.test(from);
 
-    // FIRST: Check for known retailers in sender or body - most reliable
+    // FIRST: Check for known retailers - most reliable
     const knownRetailers = [
         { pattern: /newegg/i, name: 'Newegg' },
         { pattern: /amazon/i, name: 'Amazon' },
@@ -842,6 +868,10 @@ function extractMerchant(from, subject, body = '') {
     for (const { pattern, name } of knownRetailers) {
         if (pattern.test(bodyStart)) return name;
     }
+
+    // If it's a carrier email and no known retailer was found, return Unknown
+    // (don't try to extract UPS/FedEx/etc as the merchant)
+    if (isCarrier) return 'Unknown';
 
     // Check if sender is PayPal - need to find real merchant from body
     const isPaymentProcessor = /paypal|venmo|zelle|cashapp/i.test(from);
@@ -911,9 +941,14 @@ function extractAmount(text) {
     // Remove savings/discount amounts from consideration (they're not what was paid)
     // Replace them with placeholder so they don't get picked up
     let cleanText = text
-        .replace(/(?:you\s+)?sav(?:e|ed|ings)[:\s]*\$[\d,]+\.\d{2}/gi, 'SAVINGS_REMOVED')
+        .replace(/(?:you\s+)?sav(?:e|ed|ings)[:\s]*-?\$[\d,]+\.\d{2}/gi, 'SAVINGS_REMOVED')
         .replace(/discount[:\s]*-?\$[\d,]+\.\d{2}/gi, 'DISCOUNT_REMOVED')
-        .replace(/(?:member\s+)?savings[:\s]*-?\$[\d,]+\.\d{2}/gi, 'SAVINGS_REMOVED');
+        .replace(/(?:member\s+)?savings[:\s]*-?\$[\d,]+\.\d{2}/gi, 'SAVINGS_REMOVED')
+        .replace(/(?:you\s+)?save[:\s]*-?\$[\d,]+\.\d{2}/gi, 'SAVINGS_REMOVED')
+        .replace(/-\$[\d,]+\.\d{2}/g, 'NEGATIVE_REMOVED')  // Negative amounts are discounts
+        .replace(/\$[\d,]+\.\d{2}\s+off/gi, 'DISCOUNT_REMOVED')  // "$X off"
+        .replace(/rollback[:\s]*\$[\d,]+\.\d{2}/gi, 'SAVINGS_REMOVED')  // Walmart rollback
+        .replace(/was\s+\$[\d,]+\.\d{2}/gi, 'WAS_PRICE_REMOVED');  // "was $X" = old price
 
     // First, try to find amount near "total" (order total, grand total, etc.)
     // But NOT "savings total" or "discount total"
