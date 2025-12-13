@@ -1,4 +1,4 @@
-// Order Tracker v82 - Fix merchant extraction, better deduplication
+// Order Tracker v83 - Better order consolidation, smarter amount detection
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -290,7 +290,7 @@ function processEmails(rawEmails, dismissed) {
     console.log(`Parsed ${parsed.length} relevant emails`);
 
     // Step 2: Group emails into orders
-    // Key insight: consolidate by order number, or by amount+merchant+date
+    // Consolidate by: order number, OR same merchant within 1 day
     const orderGroups = [];
 
     for (const email of parsed) {
@@ -314,15 +314,15 @@ function processEmails(rawEmails, dismissed) {
             );
         }
 
-        // Match by amount + merchant + date (within 3 days)
-        if (!foundGroup && email.amount > 0 && email.merchant !== 'Unknown') {
+        // Match by same merchant + close date (within 1 day) - regardless of amount
+        // This catches multiple emails about the same order
+        if (!foundGroup && email.merchant && email.merchant !== 'Unknown') {
             foundGroup = orderGroups.find(g => {
                 return g.emails.some(e => {
-                    if (!e.amount || e.merchant === 'Unknown') return false;
-                    const amountMatch = Math.abs(e.amount - email.amount) < 1.00;
+                    if (e.merchant === 'Unknown') return false;
                     const merchantMatch = isSameMerchant(e.merchant, email.merchant);
-                    const dateMatch = Math.abs(e.date - email.date) < 3 * 24 * 60 * 60 * 1000;
-                    return amountMatch && merchantMatch && dateMatch;
+                    const dateMatch = Math.abs(e.date - email.date) < 1 * 24 * 60 * 60 * 1000; // 1 day
+                    return merchantMatch && dateMatch;
                 });
             });
         }
@@ -390,9 +390,22 @@ function createOrderFromGroup(emails) {
     const deliveryEmail = deliveryEmails[0];
     const shippingEmail = shippingEmails[0];
 
-    // Get amount (highest value, likely the total)
-    const amounts = emails.map(e => e.amount).filter(a => a > 0);
-    const amount = amounts.length ? Math.max(...amounts) : 0;
+    // Get amount - prefer from order confirmation, then most common, then highest
+    let amount = 0;
+    // First try: amount from order confirmation email
+    const orderAmount = orderEmails.find(e => e.amount > 0)?.amount;
+    if (orderAmount) {
+        amount = orderAmount;
+    } else {
+        // Second try: most common amount (appears multiple times)
+        const amounts = emails.map(e => e.amount).filter(a => a > 0);
+        if (amounts.length > 0) {
+            const amountCounts = {};
+            amounts.forEach(a => { amountCounts[a] = (amountCounts[a] || 0) + 1; });
+            const sorted = Object.entries(amountCounts).sort((a, b) => b[1] - a[1]);
+            amount = parseFloat(sorted[0][0]);
+        }
+    }
 
     // Get merchant (prefer non-Unknown, non-PayPal for actual merchant)
     let merchant = 'Unknown';
