@@ -1,4 +1,4 @@
-// Order Tracker v92 - Better item extraction (skip $0.00 items), better delivery detection
+// Order Tracker v93 - Clean item titles, more savings filters, better ETA display
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -761,6 +761,11 @@ function cleanItem(text) {
         .replace(/^\d+\s*x\s*/i, '')
         .replace(/\s+/g, ' ')
         .replace(/-{3,}/g, ' ')  // Only replace 3+ dashes
+        // Remove common garbage prefixes from retailer emails
+        .replace(/^View\s+order\s+details?\s*/i, '')
+        .replace(/^\d+\s+items?\s*/i, '')
+        .replace(/^Order\s+details?\s*/i, '')
+        .replace(/^Item\s+\d+\s*:?\s*/i, '')
         .trim();
 
     if (!item || item.length < 3) return null;
@@ -948,7 +953,12 @@ function extractAmount(text) {
         .replace(/-\$[\d,]+\.\d{2}/g, 'NEGATIVE_REMOVED')  // Negative amounts are discounts
         .replace(/\$[\d,]+\.\d{2}\s+off/gi, 'DISCOUNT_REMOVED')  // "$X off"
         .replace(/rollback[:\s]*\$[\d,]+\.\d{2}/gi, 'SAVINGS_REMOVED')  // Walmart rollback
-        .replace(/was\s+\$[\d,]+\.\d{2}/gi, 'WAS_PRICE_REMOVED');  // "was $X" = old price
+        .replace(/was\s+\$[\d,]+\.\d{2}/gi, 'WAS_PRICE_REMOVED')  // "was $X" = old price
+        // Walmart-specific: any line containing "saving" with a dollar amount
+        .replace(/^.*saving.*\$[\d,]+\.\d{2}.*$/gmi, 'SAVINGS_LINE_REMOVED')
+        // Item prices (before any totals) - often smaller than total
+        .replace(/item\s+price[:\s]*\$[\d,]+\.\d{2}/gi, 'ITEM_PRICE_REMOVED')
+        .replace(/price[:\s]*\$[\d,]+\.\d{2}\s+(?:each|per)/gi, 'ITEM_PRICE_REMOVED');
 
     // First, try to find amount near "total" (order total, grand total, etc.)
     // But NOT "savings total" or "discount total"
@@ -1172,7 +1182,7 @@ function displayOrders() {
         } else {
             // Use extracted expected delivery date if available, otherwise calculate from ship date
             const eta = o.expectedDelivery ? formatDate(o.expectedDelivery)
-                : (o.shipDate ? calcETA(o.shipDate) : null);
+                : (o.shipDate ? calcETA(o.shipDate, !!o.tracking) : null);
             const status = o.shipDate ? 'Shipped' : 'Awaiting shipment';
 
             // Make tracking number a clickable link
@@ -1206,9 +1216,12 @@ function displayOrders() {
     ordersContainer.innerHTML = html;
 }
 
-function calcETA(shipDate) {
+function calcETA(shipDate, hasTracking = false) {
     const eta = new Date(shipDate.getTime() + 5 * 24 * 60 * 60 * 1000);
-    if (eta < new Date()) return 'Any day now';
+    if (eta < new Date()) {
+        // Past due - show helpful message
+        return hasTracking ? 'Check tracking' : 'Likely delivered';
+    }
     return formatDate(eta);
 }
 
