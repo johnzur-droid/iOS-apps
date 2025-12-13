@@ -1,4 +1,4 @@
-// Order Tracker v83 - Better order consolidation, smarter amount detection
+// Order Tracker v84 - Fix consolidation, longer auto-delivery window
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -290,7 +290,8 @@ function processEmails(rawEmails, dismissed) {
     console.log(`Parsed ${parsed.length} relevant emails`);
 
     // Step 2: Group emails into orders
-    // Consolidate by: order number, OR same merchant within 1 day
+    // Consolidate by: order number, OR same amount + merchant + date (within 2 days)
+    // NOT just by merchant alone - that combines different orders
     const orderGroups = [];
 
     for (const email of parsed) {
@@ -307,22 +308,23 @@ function processEmails(rawEmails, dismissed) {
         // Try to find existing group for this email
         let foundGroup = null;
 
-        // Match by order number
+        // Match by order number (exact match required)
         if (email.orderNumber) {
             foundGroup = orderGroups.find(g =>
                 g.emails.some(e => e.orderNumber && e.orderNumber === email.orderNumber)
             );
         }
 
-        // Match by same merchant + close date (within 1 day) - regardless of amount
-        // This catches multiple emails about the same order
-        if (!foundGroup && email.merchant && email.merchant !== 'Unknown') {
+        // Match by same amount + same merchant + close date (within 2 days)
+        // This is stricter - prevents combining different orders from same merchant
+        if (!foundGroup && email.amount > 0 && email.merchant && email.merchant !== 'Unknown') {
             foundGroup = orderGroups.find(g => {
                 return g.emails.some(e => {
-                    if (e.merchant === 'Unknown') return false;
+                    if (!e.amount || e.merchant === 'Unknown') return false;
+                    const amountMatch = Math.abs(e.amount - email.amount) < 1.00;
                     const merchantMatch = isSameMerchant(e.merchant, email.merchant);
-                    const dateMatch = Math.abs(e.date - email.date) < 1 * 24 * 60 * 60 * 1000; // 1 day
-                    return merchantMatch && dateMatch;
+                    const dateMatch = Math.abs(e.date - email.date) < 2 * 24 * 60 * 60 * 1000; // 2 days
+                    return amountMatch && merchantMatch && dateMatch;
                 });
             });
         }
@@ -491,14 +493,14 @@ function createOrderFromGroup(emails) {
     if (deliveryEmail) {
         delivered = true;
     } else {
-        // Auto-mark as delivered based on age
+        // Auto-mark as delivered based on age (be generous - 14 days shipped, 21 days ordered)
         const now = Date.now();
         if (shipDate) {
             const shipAge = (now - shipDate) / (1000 * 60 * 60 * 24);
-            if (shipAge > 7) delivered = true;
+            if (shipAge > 14) delivered = true;
         } else {
             const orderAge = (now - orderEmail.date) / (1000 * 60 * 60 * 24);
-            if (orderAge > 10) delivered = true;
+            if (orderAge > 21) delivered = true;
         }
     }
 
