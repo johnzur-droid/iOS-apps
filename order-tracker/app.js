@@ -1,4 +1,4 @@
-// Order Tracker v88 - Remove mayoarts from BAD_MERCHANTS (was legitimate order)
+// Order Tracker v89 - Stable order IDs, filter garbage orders better
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -489,9 +489,12 @@ function createOrderFromGroup(emails) {
         if (/^[A-Za-z0-9_-]{20,}$/.test(text)) return true;
         // Just numbers and dashes
         if (/^[\d\s\-#]+$/.test(text)) return true;
-        // Common garbage words that get extracted as item names
-        const garbageWords = ['subtotal', 'shipping', 'total', 'confirmed', 'confirmation', 'status', 'summary', 'information', 'update', 'notification'];
-        if (garbageWords.includes(text.toLowerCase())) return true;
+        // Common garbage words that get extracted as item names (check contains, not exact)
+        const garbageWords = ['subtotal', 'shipping total', 'order total', 'grand total', 'confirmation', 'status', 'summary', 'information', 'update', 'notification'];
+        const lower = text.toLowerCase();
+        if (garbageWords.some(w => lower.includes(w))) return true;
+        // "Free" followed by price-like text
+        if (/^free\s/i.test(text)) return true;
         return false;
     };
 
@@ -564,8 +567,25 @@ function createOrderFromGroup(emails) {
         }
     }
 
+    // Filter out garbage orders
+    // $999.99 is often a placeholder/error price
+    if (amount === 999.99) return null;
+    // Unknown merchant with no order number and no tracking = garbage
+    if (merchant === 'Unknown' && !orderNumber && !tracking) return null;
+
+    // Create stable ID based on order characteristics (not email ID which can change)
+    // This ensures dismissed orders stay dismissed across scans
+    let stableId;
+    if (orderNumber) {
+        stableId = `${merchant}-${orderNumber}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+    } else {
+        // Use merchant + date + amount as fallback ID
+        const dateStr = orderEmail.date.toISOString().split('T')[0];
+        stableId = `${merchant}-${dateStr}-${amount}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+
     return {
-        id: orderEmail.id,
+        id: stableId,
         item,
         merchant,
         amount,
