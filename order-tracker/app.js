@@ -1,4 +1,4 @@
-// Order Tracker v89 - Stable order IDs, filter garbage orders better
+// Order Tracker v90 - Better amount extraction (prefer totals over item prices)
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -898,9 +898,37 @@ function isValidMerchant(name) {
 }
 
 function extractAmount(text) {
+    // First, try to find amount near "total" (order total, grand total, etc.)
+    const totalMatch = text.match(/(?:order\s+)?(?:grand\s+)?total[:\s]*\$?([\d,]+\.\d{2})/i);
+    if (totalMatch) {
+        const amount = parseFloat(totalMatch[1].replace(/,/g, ''));
+        if (amount > 1 && amount < 50000) return amount;
+    }
+
+    // Also try "Amount" or "Charged" patterns
+    const chargedMatch = text.match(/(?:amount|charged|paid|payment)[:\s]*\$?([\d,]+\.\d{2})/i);
+    if (chargedMatch) {
+        const amount = parseFloat(chargedMatch[1].replace(/,/g, ''));
+        if (amount > 1 && amount < 50000) return amount;
+    }
+
+    // Fall back to finding all amounts and using most common (not max)
     const matches = text.match(/\$[\d,]+\.\d{2}/g) || [];
     const amounts = matches.map(m => parseFloat(m.replace(/[$,]/g, ''))).filter(a => a > 1 && a < 50000);
-    return amounts.length ? Math.max(...amounts) : 0;
+    if (amounts.length === 0) return 0;
+
+    // Count occurrences - the real total often appears multiple times
+    const counts = {};
+    amounts.forEach(a => { counts[a] = (counts[a] || 0) + 1; });
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+
+    // If one amount appears more than others, use it
+    if (sorted.length > 1 && sorted[0][1] > sorted[1][1]) {
+        return parseFloat(sorted[0][0]);
+    }
+
+    // Otherwise return the last amount (often the total at bottom of email)
+    return amounts[amounts.length - 1];
 }
 
 function extractOrderNumber(text) {
