@@ -1,4 +1,4 @@
-// Order Tracker v86 - Smarter consolidation, filter more garbage
+// Order Tracker v87 - Add more retailer patterns (Macy's, Target, etc.)
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -81,7 +81,15 @@ const ORDER_PATTERNS = [
     /api\s+(usage|credits?)/i,  // API billing
     /newegg.*order/i,  // Newegg
     /walmart.*order/i,  // Walmart
-    /amazon.*order/i  // Amazon
+    /amazon.*order/i,  // Amazon
+    /macy'?s.*order/i,  // Macy's
+    /macy'?s/i,  // Any Macy's email - they're all orders
+    /target.*order/i,  // Target
+    /costco.*order/i,  // Costco
+    /dicks.*order/i,  // Dick's Sporting Goods
+    /bestbuy.*order/i,  // Best Buy
+    /nordstrom.*order/i,  // Nordstrom
+    /kohls.*order/i  // Kohl's
 ];
 
 const EXCLUDE_PATTERNS = [
