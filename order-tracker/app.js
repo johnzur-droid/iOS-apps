@@ -1,4 +1,4 @@
-// Order Tracker v87 - Add more retailer patterns (Macy's, Target, etc.)
+// Order Tracker v88 - Remove mayoarts from BAD_MERCHANTS (was legitimate order)
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -11,7 +11,7 @@ const LABEL_NAMES = ['STORE', 'PAYPAL'];
 const DAYS_TO_SCAN = 30;
 
 // Bad merchants to filter out - payment processors and generic names
-const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'paypal', 'members', 'notifications', 'service', 'noreply', 'no-reply', 'info', 'support', 'orders', 'shipping', 'customer', 'john zur', 'subtotal', 'thescarfgiraffe', 'martinsbike', 'lightwerkz', 'valleywellnessnj', 'order', 'mayoarts'];
+const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'paypal', 'members', 'notifications', 'service', 'noreply', 'no-reply', 'info', 'support', 'orders', 'shipping', 'customer', 'john zur', 'subtotal', 'thescarfgiraffe', 'martinsbike', 'lightwerkz', 'valleywellnessnj', 'order'];
 
 // Subscription keywords - must be explicit subscription terms (NOT invoice alone)
 const SUBSCRIPTION_PATTERNS = [
