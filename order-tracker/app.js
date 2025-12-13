@@ -1,4 +1,4 @@
-// Order Tracker v85 - Filter garbage orders, better validation
+// Order Tracker v86 - Smarter consolidation, filter more garbage
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -11,7 +11,7 @@ const LABEL_NAMES = ['STORE', 'PAYPAL'];
 const DAYS_TO_SCAN = 30;
 
 // Bad merchants to filter out - payment processors and generic names
-const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'paypal', 'members', 'notifications', 'service', 'noreply', 'no-reply', 'info', 'support', 'orders', 'shipping', 'customer', 'john zur', 'subtotal', 'thescarfgiraffe', 'martinsbike', 'lightwerkz', 'valleywellnessnj'];
+const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'paypal', 'members', 'notifications', 'service', 'noreply', 'no-reply', 'info', 'support', 'orders', 'shipping', 'customer', 'john zur', 'subtotal', 'thescarfgiraffe', 'martinsbike', 'lightwerkz', 'valleywellnessnj', 'order', 'mayoarts'];
 
 // Subscription keywords - must be explicit subscription terms (NOT invoice alone)
 const SUBSCRIPTION_PATTERNS = [
@@ -290,8 +290,7 @@ function processEmails(rawEmails, dismissed) {
     console.log(`Parsed ${parsed.length} relevant emails`);
 
     // Step 2: Group emails into orders
-    // Consolidate by: order number, OR same amount + merchant + date (within 2 days)
-    // NOT just by merchant alone - that combines different orders
+    // Consolidate by: order number, OR same merchant + same day (unless different order numbers)
     const orderGroups = [];
 
     for (const email of parsed) {
@@ -315,16 +314,20 @@ function processEmails(rawEmails, dismissed) {
             );
         }
 
-        // Match by same amount + same merchant + close date (within 2 days)
-        // This is stricter - prevents combining different orders from same merchant
-        if (!foundGroup && email.amount > 0 && email.merchant && email.merchant !== 'Unknown') {
+        // Match by same merchant + same day, UNLESS they have DIFFERENT order numbers
+        if (!foundGroup && email.merchant && email.merchant !== 'Unknown') {
             foundGroup = orderGroups.find(g => {
                 return g.emails.some(e => {
-                    if (!e.amount || e.merchant === 'Unknown') return false;
-                    const amountMatch = Math.abs(e.amount - email.amount) < 1.00;
+                    if (e.merchant === 'Unknown') return false;
                     const merchantMatch = isSameMerchant(e.merchant, email.merchant);
-                    const dateMatch = Math.abs(e.date - email.date) < 2 * 24 * 60 * 60 * 1000; // 2 days
-                    return amountMatch && merchantMatch && dateMatch;
+                    const dateMatch = Math.abs(e.date - email.date) < 1 * 24 * 60 * 60 * 1000; // 1 day
+
+                    // Don't combine if both have order numbers but they're different
+                    if (email.orderNumber && e.orderNumber && email.orderNumber !== e.orderNumber) {
+                        return false;
+                    }
+
+                    return merchantMatch && dateMatch;
                 });
             });
         }
