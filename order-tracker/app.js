@@ -1,4 +1,4 @@
-// Order Tracker v96 - Simplified generic patterns (works for ANY vendor)
+// Order Tracker v97 - Fix ID stability, filter non-products, better garbage detection
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -11,7 +11,10 @@ const LABEL_NAMES = ['STORE', 'PAYPAL'];
 const DAYS_TO_SCAN = 30;
 
 // Bad merchants to filter out - payment processors and generic names
-const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'paypal', 'members', 'notifications', 'service', 'noreply', 'no-reply', 'info', 'support', 'orders', 'shipping', 'customer', 'john zur', 'subtotal', 'thescarfgiraffe', 'martinsbike', 'lightwerkz', 'valleywellnessnj', 'order'];
+const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'paypal', 'stripe', 'members', 'notifications', 'service', 'noreply', 'no-reply', 'info', 'support', 'orders', 'shipping', 'customer', 'john zur', 'subtotal', 'thescarfgiraffe', 'martinsbike', 'lightwerkz', 'valleywellnessnj', 'order', 'logistics'];
+
+// Non-product services to skip (rides, restaurants, etc.)
+const SKIP_SERVICES = ['uber', 'lyft', 'doordash', 'grubhub', 'ubereats', 'postmates', 'instacart'];
 
 // Subscription keywords - must be explicit subscription terms (NOT invoice alone)
 const SUBSCRIPTION_PATTERNS = [
@@ -94,7 +97,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v96 - Simplified generic patterns');
+    console.log('Order Tracker v97 - Fix ID stability, filter non-products');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -567,15 +570,17 @@ function createOrderFromGroup(emails) {
     // Create stable ID based on order characteristics (not email ID which can change)
     // This ensures dismissed orders stay dismissed across scans
     // Priority: order number > tracking number > merchant + date (without amount, which can vary)
+    // Use normalized merchant name for consistency across scans
+    const normalizedMerchant = normalizeMerchant(merchant);
     let stableId;
     if (orderNumber) {
-        stableId = `${merchant}-${orderNumber}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+        stableId = `${normalizedMerchant}-${orderNumber}`.toLowerCase().replace(/[^a-z0-9]/g, '');
     } else if (tracking) {
-        stableId = `${merchant}-${tracking}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+        stableId = `${normalizedMerchant}-${tracking}`.toLowerCase().replace(/[^a-z0-9]/g, '');
     } else {
         // Use merchant + date only (amount can vary between scans causing ID changes)
         const dateStr = orderEmail.date.toISOString().split('T')[0];
-        stableId = `${merchant}-${dateStr}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+        stableId = `${normalizedMerchant}-${dateStr}`.toLowerCase().replace(/[^a-z0-9]/g, '');
     }
 
     return {
@@ -616,8 +621,15 @@ function parseEmail(msg) {
     // Check if from a known subscription service - auto-treat as order
     const isFromSubscriptionService = SUBSCRIPTION_SERVICES.some(s => fromLower.includes(s));
 
+    // Skip non-product services (rides, restaurants, food delivery)
+    const isNonProductService = SKIP_SERVICES.some(s => fromLower.includes(s));
+    if (isNonProductService) {
+        console.log('SKIPPED (non-product service):', subject.substring(0, 50), '| From:', from.substring(0, 30));
+        return null;
+    }
+
     // Determine email type
-    const isFromCarrier = /(ups|usps|fedex|dhl)[\.\@]/i.test(from);
+    const isFromCarrier = /(ups|usps|fedex|dhl|logistics)[\.\@]/i.test(from);
     const isDelivered = DELIVERED_PATTERNS.some(p => p.test(text));
     const isShipping = !isDelivered && /shipped|tracking|in transit|out for delivery/i.test(text);
     const isOrder = !isFromCarrier && (ORDER_PATTERNS.some(p => p.test(text)) || isFromSubscriptionService);
@@ -651,9 +663,30 @@ function parseEmail(msg) {
 
 function isSameMerchant(m1, m2) {
     if (!m1 || !m2 || m1 === 'Unknown' || m2 === 'Unknown') return false;
-    const n1 = m1.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const n2 = m2.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const n1 = normalizeMerchant(m1);
+    const n2 = normalizeMerchant(m2);
     return n1 === n2 || n1.includes(n2) || n2.includes(n1);
+}
+
+// Normalize merchant name for consistent IDs
+function normalizeMerchant(name) {
+    if (!name) return '';
+    let n = name.toLowerCase()
+        .replace(/[^a-z0-9]/g, '')  // Remove non-alphanumeric
+        .replace(/^the/, '')         // Remove leading "the"
+        .replace(/inc$|llc$|corp$|co$/, '')  // Remove company suffixes
+        .replace(/store$|shop$|online$/, ''); // Remove store suffixes
+    // Common variations
+    const aliases = {
+        'dickssportinggoods': 'dicks',
+        'dickssporting': 'dicks',
+        'deidentification': 'did',
+        'deidentificationinc': 'did',
+        'theshed': 'shed',
+        'valleywellness': 'valleywellness',
+        'valleywellnessnj': 'valleywellness'
+    };
+    return aliases[n] || n;
 }
 
 // ============ EXTRACTION ============
@@ -726,6 +759,17 @@ function cleanItem(text) {
     const GARBAGE = ['normal', 'none', 'auto', 'inherit', 'important', 'undefined', 'null', 'true', 'false'];
     if (GARBAGE.includes(item.toLowerCase())) return null;
 
+    // Garbage phrases that get extracted as items
+    const GARBAGE_PHRASES = [
+        /^offerings/i, /^common questions/i, /^please visit/i,
+        /^in the car/i, /^report it/i, /^using the link/i,
+        /^discover brand/i, /^brand store/i, /^wonderful item/i,
+        /^receipt from/i, /^thanks for/i, /^thank you for/i,
+        /^your order/i, /^your purchase/i, /^your payment/i,
+        /^order confirmed/i, /^payment received/i
+    ];
+    if (GARBAGE_PHRASES.some(p => p.test(item))) return null;
+
     // Skip FREE/promotional items - we want the paid item
     if (/^free\b/i.test(item)) return null;
     if (/\bfree\s+(gift|item|bonus|sample)\b/i.test(item)) return null;
@@ -791,7 +835,7 @@ function extractMerchant(from, subject, body = '') {
     if (/(ups|usps|fedex|dhl)[@.]/i.test(from)) return 'Unknown';
 
     // Check if sender is a payment processor - need to find real merchant in body
-    const isPaymentProcessor = /paypal|venmo|zelle|cashapp/i.test(from);
+    const isPaymentProcessor = /paypal|venmo|zelle|cashapp|stripe/i.test(from);
 
     // Try to get domain from email (unless it's a payment processor)
     if (!isPaymentProcessor) {
@@ -820,12 +864,30 @@ function extractMerchant(from, subject, body = '') {
         }
     }
 
-    // For PayPal, try to find merchant in body with strict patterns
+    // For payment processors, try to find merchant in body with strict patterns
     if (isPaymentProcessor && body) {
         // PayPal: "You sent $X.XX USD to [Merchant]"
         let match = body.match(/sent\s+\$[\d.,]+\s+USD\s+to\s+([A-Z][A-Za-z0-9\s&'.-]{2,25})/i);
         if (match && isValidMerchant(match[1])) {
             return match[1].trim();
+        }
+        // Stripe: "Receipt from [Merchant]" in subject or body
+        match = body.match(/receipt\s+from\s+([A-Z][A-Za-z0-9\s&'.-]{2,30})/i);
+        if (match && isValidMerchant(match[1])) {
+            return match[1].trim();
+        }
+        // Stripe: Company name often in "Thanks for your payment to [Merchant]"
+        match = body.match(/payment\s+to\s+([A-Z][A-Za-z0-9\s&'.-]{2,30})/i);
+        if (match && isValidMerchant(match[1])) {
+            return match[1].trim();
+        }
+    }
+
+    // Also check subject for "Receipt from [Merchant]"
+    if (/stripe/i.test(from)) {
+        const subMatch = subject.match(/receipt\s+from\s+([A-Z][A-Za-z0-9\s&'.-]{2,30})/i);
+        if (subMatch && isValidMerchant(subMatch[1])) {
+            return subMatch[1].trim();
         }
     }
 
@@ -1150,5 +1212,6 @@ function esc(t) {
 window.dismissOrder = dismissOrder;
 
 if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('service-worker.js').catch(() => {});
+    // Cache bust service worker too - increment version to force update
+    navigator.serviceWorker.register('service-worker.js?v=97').catch(() => {});
 }
