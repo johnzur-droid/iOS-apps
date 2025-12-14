@@ -1,4 +1,4 @@
-// Order Tracker v95 - Fix eBay order detection (Thanks for another purchase)
+// Order Tracker v96 - Simplified generic patterns (works for ANY vendor)
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -60,44 +60,19 @@ const DELIVERED_PATTERNS = [
     /your delivery is complete/i, /dropoff complete/i
 ];
 
+// Generic order patterns - work for ANY vendor, no vendor-specific patterns
 const ORDER_PATTERNS = [
-    /order\s+(is\s+)?confirm/i,  // "order confirmed", "order is confirmed"
-    /order received/i, /thanks for your order/i,
-    /thank you for your (order|purchase)/i, /purchase confirm/i,
-    /receipt for your/i, /order #/i, /order number/i,
-    /order has been (placed|received|confirmed)/i,
-    /payment (received|confirmed|complete|successful)/i,
-    /your receipt/i, /receipt from/i,
-    /payment\s+is\s+pending/i,  // PayPal pending
-    /you\s+(sent|authorized)\s+(a\s+)?payment/i,  // PayPal sent payment
-    /money\s+sent/i,  // PayPal money sent
-    /you\s+paid/i,  // PayPal you paid
-    /your order is/i,  // "your order is confirmed", "your order is on the way"
-    /order update/i,  // eBay "Order update:"
-    /ebay.*order/i,  // eBay orders
-    /won\s+(the\s+)?item/i,  // eBay auction won
-    /you\s+bought/i,  // eBay purchase
-    /thanks for (another|your)\s+purchase/i,  // eBay "Thanks for another purchase"
-    /your order details/i,  // eBay order confirmation body
-    /your order will ship/i,  // eBay shipping info
-    /invoice/i,  // Subscription invoices
-    /billing\s+(statement|summary|notification)/i,  // Billing
-    /charge\s+(to|for|of)/i,  // Credit card charges
-    /successfully\s+(charged|processed|renewed)/i,  // Renewals
-    /subscription\s+(started|renewed|confirmed)/i,  // Subscriptions
-    /your\s+\w+\s+subscription/i,  // "Your X subscription"
-    /api\s+(usage|credits?)/i,  // API billing
-    /newegg.*order/i,  // Newegg
-    /walmart.*order/i,  // Walmart
-    /amazon.*order/i,  // Amazon
-    /macy'?s.*order/i,  // Macy's
-    /macy'?s/i,  // Any Macy's email - they're all orders
-    /target.*order/i,  // Target
-    /costco.*order/i,  // Costco
-    /dicks.*order/i,  // Dick's Sporting Goods
-    /bestbuy.*order/i,  // Best Buy
-    /nordstrom.*order/i,  // Nordstrom
-    /kohls.*order/i  // Kohl's
+    /order/i,  // Any mention of "order"
+    /purchase/i,  // Any mention of "purchase"
+    /receipt/i,  // Receipts
+    /invoice/i,  // Invoices
+    /payment/i,  // Payment confirmations
+    /you (bought|paid)/i,  // Purchase confirmations
+    /subscription/i,  // Subscriptions
+    /billing/i,  // Billing
+    /charged/i,  // Charges
+    /shipping|shipped|shipment/i,  // Shipping notifications
+    /\$\d+\.\d{2}/  // Contains a price - likely order related
 ];
 
 const EXCLUDE_PATTERNS = [
@@ -119,7 +94,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v76 - Better product extraction');
+    console.log('Order Tracker v96 - Simplified generic patterns');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -686,80 +661,47 @@ function isSameMerchant(m1, m2) {
 function extractItem(subject, body = '') {
     let match;
 
-    // PRIORITY: Search body FIRST - it has actual product names
+    // Search body for product names using GENERIC patterns
     if (body && body.length > 10) {
-        // First, remove FREE items and $0.00 items from consideration
-        // Replace them so they don't get matched
+        // Remove FREE/$0.00 items from consideration
         let cleanBody = body
-            .replace(/^.*\$0\.00.*$/gm, '')  // Remove lines with $0.00
-            .replace(/^.*FREE.*$/gmi, '')     // Remove lines with FREE
-            .replace(/^.*\bfree\b.*$/gmi, ''); // Remove lines with "free" word
+            .replace(/^.*\$0\.00.*$/gm, '')
+            .replace(/^.*\bFREE\b.*$/gmi, '');
 
-        // Newegg/electronics: Product with price pattern - find items with real prices
-        // Look for "Product Name ... $XX.XX" but NOT $0.00
-        const priceLines = cleanBody.match(/^([A-Z][A-Za-z0-9][A-Za-z0-9\s,.'"-]{5,50})\s+\$[1-9]\d*\.\d{2}/gm);
+        // Generic: Product name followed by price (most common email format)
+        const priceLines = cleanBody.match(/^([A-Z][A-Za-z0-9][A-Za-z0-9\s,.'"-]{5,55})\s+\$[1-9]/gm);
         if (priceLines && priceLines.length > 0) {
-            // Get the first item with a real price
-            const firstPriceLine = priceLines[0];
-            match = firstPriceLine.match(/^([A-Z][A-Za-z0-9][A-Za-z0-9\s,.'"-]{5,50})\s+\$/);
+            match = priceLines[0].match(/^([A-Z][A-Za-z0-9][A-Za-z0-9\s,.'"-]{5,55})\s+\$/);
             if (match) { const item = cleanItem(match[1]); if (item) return item; }
         }
 
-        // Amazon: "Items Ordered: [product]" - very specific pattern
-        match = cleanBody.match(/Items?\s+Ordered:?\s*\n\s*([A-Z][A-Za-z0-9][^\n\r]{5,55})/);
+        // Generic: Product name on line before "Price:"
+        match = cleanBody.match(/^([A-Z][^\n]{8,60})\s*\n\s*Price:/m);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // eBay: "You bought:" or "Item:" followed by product name
-        match = cleanBody.match(/(?:You\s+bought|Item\s+title|Item\s+name)[:\s]+\n?\s*([A-Z][A-Za-z0-9][^\n\r]{8,55})/i);
+        // Generic: "Item:", "Product:", "Description:" followed by name
+        match = cleanBody.match(/(?:Item|Product|Description)[:\s]+\n?\s*([A-Z][^\n\r]{5,55})/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // eBay: Product name on line before "Price:" (common eBay format)
-        match = cleanBody.match(/^([A-Z][A-Z0-9\s,.'"-]{10,60})\s*\n\s*Price:/m);
+        // Generic: Quantity patterns "1 x Product" or "Qty: 1 Product"
+        match = cleanBody.match(/(?:Qty:?\s*\d+\s*[-:]?\s*|^\s*\d+\s+x\s+)([A-Z][^\n\r]{5,50})/im);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-        // Fashion/clothing: look for specific garment patterns
-        match = cleanBody.match(/((?:Men's|Women's|Boys'|Girls'|Ladies')\s+[A-Z][A-Za-z\s'-]{5,40})/);
-        if (match) { const item = cleanItem(match[1]); if (item) return item; }
-
-        // Clothing items with brand + type
-        match = cleanBody.match(/([A-Z][A-Za-z]+\s+(?:Sweater|Shirt|Pants|Jeans|Dress|Jacket|Coat|Blouse|Skirt|Shorts|Hoodie|Cardigan|Pullover|Henley|T-Shirt|Polo))/);
-        if (match) { const item = cleanItem(match[1]); if (item) return item; }
-
-        // Electronics: RAM, SSD, GPU, CPU patterns
-        match = cleanBody.match(/([A-Z][A-Za-z0-9\s-]*(?:RAM|DDR[45]|SSD|HDD|GPU|CPU|GB|TB|MHz)[A-Za-z0-9\s-]*)/i);
-        if (match) { const item = cleanItem(match[1]); if (item) return item; }
-
-        // Quantity pattern: "1 x Product Name" or "Qty: 1 Product Name"
-        match = cleanBody.match(/(?:Qty:?\s*\d+\s*-?\s*|^\s*\d+\s+x\s+)([A-Z][A-Za-z0-9][A-Za-z0-9\s'-]{5,45})/im);
-        if (match) { const item = cleanItem(match[1]); if (item) return item; }
-
-        // Decals: "Your design:" or "Design name:"
-        match = cleanBody.match(/(?:Your\s+design|Design\s+name|Decal\s+design)[:\s]+([A-Z][A-Za-z0-9][^\n\r]{5,35})/i);
-        if (match) { const item = cleanItem(match[1]); if (item) return item; }
-
-        // "Product Name:" pattern (more specific - requires colon)
-        match = cleanBody.match(/Product\s+Name:\s*([A-Z][A-Za-z0-9][^\n\r]{5,45})/i);
-        if (match) { const item = cleanItem(match[1]); if (item) return item; }
-
-        // "Description:" pattern
-        match = cleanBody.match(/Description:\s*([A-Z][A-Za-z0-9][^\n\r]{5,45})/i);
+        // Generic: "Items Ordered:" followed by product
+        match = cleanBody.match(/Items?\s+Ordered:?\s*\n\s*([A-Z][^\n\r]{5,55})/i);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
     }
 
-    // THEN check subject for product names
-    // Amazon: "Your Amazon.com order of [product]..."
-    match = subject.match(/order\s+of\s+([A-Z][A-Za-z0-9][^\.]{3,55}?)(?:\s+has|\s+and|\s*\.\.\.|$)/i);
+    // Check subject for product names
+    match = subject.match(/order\s+of\s+([A-Z][^\.]{3,55}?)(?:\s+has|\s+and|\.\.\.|$)/i);
     if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-    // Quoted product name: "Your order: 'Product Name'"
     match = subject.match(/['""']([A-Z][^'""']{3,45})['""']/);
     if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-    // "Your shipment of [product]"
-    match = subject.match(/(?:shipment|package)\s+of\s+([A-Z][A-Za-z0-9][^\.]{3,45}?)(?:\s+has|\s+is|\.\.\.|$)/i);
+    match = subject.match(/(?:shipment|package)\s+of\s+([A-Z][^\.]{3,45}?)(?:\s+has|\s+is|\.\.\.|$)/i);
     if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
-    // Fall back: return "Order" - don't try to clean up garbage subjects
     return 'Order';
 }
 
@@ -845,51 +787,10 @@ function getTrackingUrl(tracking) {
 }
 
 function extractMerchant(from, subject, body = '') {
-    const isCarrier = /(ups|usps|fedex|dhl)/i.test(from);
+    // Skip carriers - they're not the merchant
+    if (/(ups|usps|fedex|dhl)[@.]/i.test(from)) return 'Unknown';
 
-    // FIRST: Check for known retailers - most reliable
-    const knownRetailers = [
-        { pattern: /de-?identification/i, name: 'De-Identification Inc.' },
-        { pattern: /newegg/i, name: 'Newegg' },
-        { pattern: /amazon/i, name: 'Amazon' },
-        { pattern: /walmart/i, name: 'Walmart' },
-        { pattern: /target\.com|target\s/i, name: 'Target' },
-        { pattern: /ebay/i, name: 'eBay' },
-        { pattern: /best\s*buy/i, name: 'Best Buy' },
-        { pattern: /home\s*depot/i, name: 'Home Depot' },
-        { pattern: /lowes/i, name: 'Lowes' },
-        { pattern: /macy/i, name: "Macy's" },
-        { pattern: /nordstrom/i, name: 'Nordstrom' },
-        { pattern: /dick'?s\s*sporting/i, name: "Dick's Sporting Goods" },
-        { pattern: /kohls/i, name: "Kohl's" },
-        { pattern: /etsy/i, name: 'Etsy' },
-        { pattern: /decals\.com|decals\s/i, name: 'Decals.com' },
-        { pattern: /grammarly/i, name: 'Grammarly' },
-        { pattern: /sudowrite/i, name: 'Sudowrite' },
-        { pattern: /anthropic/i, name: 'Anthropic' }
-    ];
-
-    // Check sender first
-    for (const { pattern, name } of knownRetailers) {
-        if (pattern.test(from)) return name;
-    }
-
-    // Check subject
-    for (const { pattern, name } of knownRetailers) {
-        if (pattern.test(subject)) return name;
-    }
-
-    // Check body (only first 500 chars to avoid false matches in footers)
-    const bodyStart = body.substring(0, 500);
-    for (const { pattern, name } of knownRetailers) {
-        if (pattern.test(bodyStart)) return name;
-    }
-
-    // If it's a carrier email and no known retailer was found, return Unknown
-    // (don't try to extract UPS/FedEx/etc as the merchant)
-    if (isCarrier) return 'Unknown';
-
-    // Check if sender is PayPal - need to find real merchant from body
+    // Check if sender is a payment processor - need to find real merchant in body
     const isPaymentProcessor = /paypal|venmo|zelle|cashapp/i.test(from);
 
     // Try to get domain from email (unless it's a payment processor)
