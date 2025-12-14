@@ -1,4 +1,4 @@
-// Order Tracker v98 - Fix dismissed orders, extend auto-delivery timeout
+// Order Tracker v99 - Strict validation, filter garbage orders
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -10,8 +10,21 @@ let pendingOrders = [];
 const LABEL_NAMES = ['STORE', 'PAYPAL'];
 const DAYS_TO_SCAN = 30;
 
-// Bad merchants to filter out - payment processors and generic names
-const BAD_MERCHANTS = ['gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails', 'oes', 'e', 't', 'i', 'a', 'unknown', 'paypal', 'stripe', 'members', 'notifications', 'service', 'noreply', 'no-reply', 'info', 'support', 'orders', 'shipping', 'customer', 'john zur', 'subtotal', 'thescarfgiraffe', 'martinsbike', 'lightwerkz', 'valleywellnessnj', 'order', 'logistics'];
+// Bad merchants to filter out - payment processors, generic names, and garbage
+const BAD_MERCHANTS = [
+    // Email providers
+    'gmail', 'yahoo', 'outlook', 'hotmail', 'mail', 'email', 'emails',
+    // Payment processors
+    'paypal', 'stripe', 'venmo', 'zelle', 'cashapp',
+    // Generic/garbage
+    'unknown', 'order', 'orders', 'shipping', 'delivery', 'logistics',
+    'notifications', 'service', 'noreply', 'no-reply', 'info', 'info3',
+    'support', 'customer', 'customer-mail', 'members', 'team',
+    // Too short
+    'oes', 'e', 't', 'i', 'a',
+    // Specific garbage from user's data
+    'john zur', 'subtotal'
+];
 
 // Non-product services to skip (rides, restaurants, etc.)
 const SKIP_SERVICES = ['uber', 'lyft', 'doordash', 'grubhub', 'ubereats', 'postmates', 'instacart'];
@@ -84,7 +97,16 @@ const EXCLUDE_PATTERNS = [
     /we miss you/i, /recommended for you/i, /account (created|updated)/i,
     /tracking update/i,  // These are updates, not orders
     /return\s+(label|instructions|request)/i, /next steps for your.*return/i,  // Returns
-    /refund\s+(processed|issued|confirmed)/i  // Refunds
+    /refund\s+(processed|issued|confirmed)/i,  // Refunds
+    // Loyalty/rewards programs - NOT orders
+    /lux\s*bux/i, /reward\s*points?/i, /redeem\s*(now|your)/i, /loyalty/i,
+    /earn(ed)?\s+\d+\s*points/i, /points\s+balance/i, /smile\.io/i,
+    // Spam indicators
+    /under\s+investigation/i, /suspended/i, /verify\s+immediately/i,
+    /urgent.*action/i, /account.*risk/i,
+    // Restaurant/food (these should be in SKIP_SERVICES but catch stragglers)
+    /tavern/i, /restaurant/i, /diner/i, /cafe/i, /bistro/i, /grill/i,
+    /your\s+table/i, /reservation/i, /takeout/i, /dine-in/i
 ];
 
 // DOM
@@ -97,7 +119,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v98 - Fix dismissed orders, extend auto-delivery timeout');
+    console.log('Order Tracker v99 - Strict validation, filter garbage orders');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -752,9 +774,16 @@ function cleanItem(text) {
         /^discover brand/i, /^brand store/i, /^wonderful item/i,
         /^receipt from/i, /^thanks for/i, /^thank you for/i,
         /^your order/i, /^your purchase/i, /^your payment/i,
-        /^order confirmed/i, /^payment received/i
+        /^order confirmed/i, /^payment received/i,
+        /^g\.?skill/i, /^brand\s+store/i,  // Newegg garbage
+        /otherwise.*send/i, /investigation/i,  // Spam
+        /review\s+\d+/i, /lux\s*bux/i, /redeem/i,  // Loyalty programs
+        /sent\s+by/i, /smile\.io/i  // Marketing
     ];
     if (GARBAGE_PHRASES.some(p => p.test(item))) return null;
+
+    // If item contains "BRAND STORE" anywhere, it's garbage
+    if (/brand\s+store/i.test(item)) return null;
 
     // Skip FREE/promotional items - we want the paid item
     if (/^free\b/i.test(item)) return null;
@@ -964,8 +993,15 @@ function extractOrderNumber(text) {
     if (order) {
         const num = order[1];
         // Reject common garbage that gets matched as order numbers
-        const garbage = ['confirmed', 'confirmation', 'shipped', 'shipping', 'delivered', 'delivery', 'status', 'summary', 'number', 'information', 'tracking', 'update'];
+        const garbage = [
+            'confirmed', 'confirmation', 'shipped', 'shipping', 'delivered', 'delivery',
+            'status', 'summary', 'number', 'information', 'tracking', 'update',
+            'online', 'received', 'pending', 'processed', 'complete', 'completed',
+            'details', 'history', 'placed', 'cancelled', 'canceled'
+        ];
         if (garbage.includes(num.toLowerCase())) return null;
+        // Must contain at least one digit to be a real order number
+        if (!/\d/.test(num)) return null;
         return num;
     }
     return null;
@@ -1199,5 +1235,5 @@ window.dismissOrder = dismissOrder;
 
 if ('serviceWorker' in navigator) {
     // Cache bust service worker too - increment version to force update
-    navigator.serviceWorker.register('service-worker.js?v=98').catch(() => {});
+    navigator.serviceWorker.register('service-worker.js?v=99').catch(() => {});
 }
