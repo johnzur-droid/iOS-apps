@@ -668,25 +668,14 @@ function isSameMerchant(m1, m2) {
     return n1 === n2 || n1.includes(n2) || n2.includes(n1);
 }
 
-// Normalize merchant name for consistent IDs
+// Normalize merchant name for consistent IDs (generic - no vendor-specific mappings)
 function normalizeMerchant(name) {
     if (!name) return '';
-    let n = name.toLowerCase()
+    return name.toLowerCase()
         .replace(/[^a-z0-9]/g, '')  // Remove non-alphanumeric
         .replace(/^the/, '')         // Remove leading "the"
-        .replace(/inc$|llc$|corp$|co$/, '')  // Remove company suffixes
-        .replace(/store$|shop$|online$/, ''); // Remove store suffixes
-    // Common variations
-    const aliases = {
-        'dickssportinggoods': 'dicks',
-        'dickssporting': 'dicks',
-        'deidentification': 'did',
-        'deidentificationinc': 'did',
-        'theshed': 'shed',
-        'valleywellness': 'valleywellness',
-        'valleywellnessnj': 'valleywellness'
-    };
-    return aliases[n] || n;
+        .replace(/inc$|llc$|corp$|co$|pbc$/, '')  // Remove company suffixes
+        .replace(/store$|shop$|online$|com$/, ''); // Remove store/web suffixes
 }
 
 // ============ EXTRACTION ============
