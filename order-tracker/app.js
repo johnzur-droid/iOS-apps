@@ -1,4 +1,4 @@
-// Order Tracker v94 - More stable IDs (no amount), add De-Identification Inc. support
+// Order Tracker v95 - Fix eBay order detection (Thanks for another purchase)
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -77,6 +77,9 @@ const ORDER_PATTERNS = [
     /ebay.*order/i,  // eBay orders
     /won\s+(the\s+)?item/i,  // eBay auction won
     /you\s+bought/i,  // eBay purchase
+    /thanks for (another|your)\s+purchase/i,  // eBay "Thanks for another purchase"
+    /your order details/i,  // eBay order confirmation body
+    /your order will ship/i,  // eBay shipping info
     /invoice/i,  // Subscription invoices
     /billing\s+(statement|summary|notification)/i,  // Billing
     /charge\s+(to|for|of)/i,  // Credit card charges
@@ -708,6 +711,10 @@ function extractItem(subject, body = '') {
 
         // eBay: "You bought:" or "Item:" followed by product name
         match = cleanBody.match(/(?:You\s+bought|Item\s+title|Item\s+name)[:\s]+\n?\s*([A-Z][A-Za-z0-9][^\n\r]{8,55})/i);
+        if (match) { const item = cleanItem(match[1]); if (item) return item; }
+
+        // eBay: Product name on line before "Price:" (common eBay format)
+        match = cleanBody.match(/^([A-Z][A-Z0-9\s,.'"-]{10,60})\s*\n\s*Price:/m);
         if (match) { const item = cleanItem(match[1]); if (item) return item; }
 
         // Fashion/clothing: look for specific garment patterns
