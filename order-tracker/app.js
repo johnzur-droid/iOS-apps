@@ -1,4 +1,4 @@
-// Order Tracker v97 - Fix ID stability, filter non-products, better garbage detection
+// Order Tracker v98 - Fix dismissed orders, extend auto-delivery timeout
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -97,7 +97,7 @@ const orderCount = document.getElementById('orderCount');
 const errorMessage = document.getElementById('errorMessage');
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Order Tracker v97 - Fix ID stability, filter non-products');
+    console.log('Order Tracker v98 - Fix dismissed orders, extend auto-delivery timeout');
     document.getElementById('authorizeBtn')?.addEventListener('click', handleAuthClick);
     document.getElementById('refreshBtn')?.addEventListener('click', scanEmails);
     document.getElementById('retryBtn')?.addEventListener('click', () => showSection('auth'));
@@ -504,14 +504,14 @@ function createOrderFromGroup(emails) {
     if (deliveryEmail) {
         delivered = true;
     } else {
-        // Auto-mark as delivered based on age (be generous - 14 days shipped, 21 days ordered)
+        // Auto-mark as delivered based on age (match DAYS_TO_SCAN window)
         const now = Date.now();
         if (shipDate) {
             const shipAge = (now - shipDate) / (1000 * 60 * 60 * 24);
-            if (shipAge > 14) delivered = true;
+            if (shipAge > 21) delivered = true;  // 21 days after shipping
         } else {
             const orderAge = (now - orderEmail.date) / (1000 * 60 * 60 * 24);
-            if (orderAge > 21) delivered = true;
+            if (orderAge > 30) delivered = true;  // 30 days after ordering (matches scan window)
         }
     }
 
@@ -668,14 +668,11 @@ function isSameMerchant(m1, m2) {
     return n1 === n2 || n1.includes(n2) || n2.includes(n1);
 }
 
-// Normalize merchant name for consistent IDs (generic - no vendor-specific mappings)
+// Normalize merchant name for consistent IDs (minimal - just lowercase and alphanumeric)
+// Keep it simple to avoid breaking previously dismissed order IDs
 function normalizeMerchant(name) {
     if (!name) return '';
-    return name.toLowerCase()
-        .replace(/[^a-z0-9]/g, '')  // Remove non-alphanumeric
-        .replace(/^the/, '')         // Remove leading "the"
-        .replace(/inc$|llc$|corp$|co$|pbc$/, '')  // Remove company suffixes
-        .replace(/store$|shop$|online$|com$/, ''); // Remove store/web suffixes
+    return name.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 // ============ EXTRACTION ============
@@ -1202,5 +1199,5 @@ window.dismissOrder = dismissOrder;
 
 if ('serviceWorker' in navigator) {
     // Cache bust service worker too - increment version to force update
-    navigator.serviceWorker.register('service-worker.js?v=97').catch(() => {});
+    navigator.serviceWorker.register('service-worker.js?v=98').catch(() => {});
 }
