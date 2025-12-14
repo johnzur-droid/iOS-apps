@@ -1,4 +1,4 @@
-// Order Tracker v93 - Clean item titles, more savings filters, better ETA display
+// Order Tracker v94 - More stable IDs (no amount), add De-Identification Inc. support
 const CLIENT_ID = '457025763296-6mfbrdce2m9065gh24ph36sdqk9i9hi9.apps.googleusercontent.com';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -21,7 +21,7 @@ const SUBSCRIPTION_PATTERNS = [
 ];
 
 // Known subscription services (digital services, not physical goods sellers)
-const SUBSCRIPTION_SERVICES = ['anthropic', 'openai', 'aws', 'azure', 'google cloud', 'digitalocean', 'heroku', 'netflix', 'spotify', 'adobe', 'grammarly', 'sudowrite', 'sudo', '2sudo'];
+const SUBSCRIPTION_SERVICES = ['anthropic', 'openai', 'aws', 'azure', 'google cloud', 'digitalocean', 'heroku', 'netflix', 'spotify', 'adobe', 'grammarly', 'sudowrite', 'sudo', '2sudo', 'de-identification', 'deidentification'];
 
 // Physical goods sellers - NOT subscriptions even if they have "invoice"
 const PHYSICAL_SELLERS = ['decals', 'amazon', 'walmart', 'target', 'ebay', 'etsy', 'lucky brand', 'macys', 'nordstrom', 'kohls', 'bestbuy', 'homedepot', 'lowes', 'newegg', 'paypal', 'costco', 'dicks', 'the shed', 'theshed'];
@@ -588,13 +588,16 @@ function createOrderFromGroup(emails) {
 
     // Create stable ID based on order characteristics (not email ID which can change)
     // This ensures dismissed orders stay dismissed across scans
+    // Priority: order number > tracking number > merchant + date (without amount, which can vary)
     let stableId;
     if (orderNumber) {
         stableId = `${merchant}-${orderNumber}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+    } else if (tracking) {
+        stableId = `${merchant}-${tracking}`.toLowerCase().replace(/[^a-z0-9]/g, '');
     } else {
-        // Use merchant + date + amount as fallback ID
+        // Use merchant + date only (amount can vary between scans causing ID changes)
         const dateStr = orderEmail.date.toISOString().split('T')[0];
-        stableId = `${merchant}-${dateStr}-${amount}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+        stableId = `${merchant}-${dateStr}`.toLowerCase().replace(/[^a-z0-9]/g, '');
     }
 
     return {
@@ -839,6 +842,7 @@ function extractMerchant(from, subject, body = '') {
 
     // FIRST: Check for known retailers - most reliable
     const knownRetailers = [
+        { pattern: /de-?identification/i, name: 'De-Identification Inc.' },
         { pattern: /newegg/i, name: 'Newegg' },
         { pattern: /amazon/i, name: 'Amazon' },
         { pattern: /walmart/i, name: 'Walmart' },
