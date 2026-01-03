@@ -1,237 +1,45 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Plex Entertainment Library - Interactive Mind Map</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-    }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      overflow: hidden;
-    }
-    #mindmap {
-      width: 100vw;
-      height: 100vh;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Calendar View">
+    <title>3-Month Calendar View</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
-  <svg id="mindmap"></svg>
+    <div class="container">
+        <header>
+            <h1>📅 Next 3 Months</h1>
+            <button id="refreshBtn" class="refresh-btn">🔄 Refresh</button>
+        </header>
 
-  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
-  <script src="https://cdn.jsdelivr.net/npm/markmap-view@0.15.4"></script>
-  <script src="https://cdn.jsdelivr.net/npm/markmap-lib@0.15.4"></script>
+        <div id="authSection" class="auth-section">
+            <p>Connect your Google Calendar to view events</p>
+            <button id="authorizeBtn" class="auth-btn">Connect Google Calendar</button>
+        </div>
 
-  <script>
-    const markdown = `# PLEX ENTERTAINMENT (12-20-25)
+        <div id="loadingSection" class="loading-section hidden">
+            <div class="spinner"></div>
+            <p>Loading your calendar events...</p>
+        </div>
 
-## Movies by Normalized Score
+        <div id="eventsSection" class="events-section hidden">
+            <div id="eventsList" class="events-list"></div>
+        </div>
 
-### High Tier Quality (8.0 - 8.5+)
-- No Other Land (8.5)
-- Flow (8.5)
-- The Seed of the Sacred Fig (8.5)
-- Surviving Syria's Prisons (8.4)
-- The Girl with the Needle (8.4)
-- 28 Years Later (8.4)
-- Bob Trevino Likes It (8.4)
-- His Three Daughters (8.4)
-- How To Make Millions Before Grandma Dies (8.3)
-- The Lost Bus (8.3)
-- HyperNormalisation (8.2)
-- Mickey 17 (8.2)
-- Anniversary (8.2)
-- Evil Does Not Exist (8.2)
-- The Correspondent (8.2)
-- The Room Next Door (8.1)
-- Late Night With The Devil (8.1)
-- Bugonia (8.1)
-- A Different Man (8.1)
-- Frankenstein (8.0)
-- The Long Walk (8.0)
-- Cunk On Life (8.0)
-- Better Man (8.0)
-- Affeksjonsverdi [Sentimental Value] (8.0)
+        <div id="errorSection" class="error-section hidden">
+            <p id="errorMessage"></p>
+            <button id="retryBtn" class="retry-btn">Try Again</button>
+        </div>
+    </div>
 
-### Mid Tier Quality (6.0 - 7.9)
-- The Outrun (7.9)
-- We Live in Time (7.9)
-- Warfare (7.9)
-- Havoc (7.9)
-- Vermiglio (7.9)
-- The Bikeriders (7.8)
-- F1: The Movie (7.8)
-- Cocaine Cowboys (7.8/8.1)
-- David Bowie: The Last Five Years (7.8)
-- My Old Ass (7.8)
-- Brian and Charles (7.8)
-- Ballerina (7.8)
-- Close Your Eyes (7.7/8.5)
-- Black Phone 2 (7.7)
-- Nitram (7.7)
-- Scarecrow (7.7)
-- Thunderbolts (7.6)
-- Small Things Like These (7.6/8.3)
-- Problemista (7.6)
-- The Night House (7.6)
-- The Friend (7.6/7.0)
-- Kinds of Kindness (7.5/6.7)
-- Megalopolis (7.4/6.1)
-- Smile 2 (7.2/7.1)
-- Am I Racist? (7.1/7.0/6.4)
-- Bad Genius (7.1/6.6)
-- The Life of Chuck (7.0/7.8)
-- The Convert (7.0/7.4)
-
-### Lower Tier Quality (Below 6.0)
-- Nuremberg (5.9)
-- Jay Kelly (5.9)
-- Materialists (5.8)
-- Mr. Burton (5.8)
-- Novocaine (5.7)
-- Roofman (5.7)
-- Predator: Badlands (5.6)
-- Fight or Flight (5.5)
-- Spinal Tap 2 (5.5)
-- Crave (5.3)
-- Mamasan (5.2)
-- Foreign Exchange (5.2)
-- Prime Minister (5.1)
-- Sinners (5.0)
-- Up! (4.5)
-
-## TV Shows by Quality Score
-
-### Exceptional Tier (95.0 - 100.0)
-- Mr. Scorsese (100.0)
-- Shogun (99.0)
-- The Bear (99.0)
-- Code of Silence (99.0)
-- I Fought the Law (95.0)
-
-### Highly Recommended (85.0 - 94.0)
-- MAID (94.0)
-- Alien: Earth (93.0)
-- Dept. Q (90.0)
-- Black Rabbit (89.0)
-- Criminal Record (89.0)
-- Task (87.0)
-- Murdaugh: Death in the Family (86.0)
-- Pluribus (85.0)
-- X-Rated Queens (85.0)
-
-### Standard Quality (75.0 - 84.0)
-- The Beast in Me (84.0)
-- IT: Welcome to Derry (83.0)
-- Landman (83.0)
-- Tulsa King (82.0)
-- The Pitt (82.0)
-- All Her Fault (82.0)
-- The Studio (81.0)
-- Brilliant Minds (81.0)
-- St. Denis Medical (81.0)
-- Survivor (80.0)
-- The Waterfront (79.0)
-- Zero Day (78.0)
-- The Monster of Florence (78.0)
-- The Night Agent (77.0)
-- The Crowded Room (76.0)
-
-### Lower Quality (Below 75.0)
-- A Spy Among Friends (73.0)
-- Orphan Black: Echoes (71.0)
-- Spymaster (70.0)
-- The Bletchley Circle (70.0)
-- Murderbot (68.0)
-- The Lovers (68.0)
-- Mob Land (52.0)
-- Madam (50.0)
-
-## Content & Nudity Advisories
-
-### Verified Explicit Nudity (Ranked Movies)
-1. Shell (Graphic full nudity central to theme)
-2. A Different Man (Graphic nudity)
-3. The Shrouds (Full frontal in sexual/grief context)
-4. The Girl with the Needle (Non-simulated nudity)
-5. Frankenstein (Upper/rear male and sheer female nudity)
-6. One Battle After Another (Strong sexual content)
-7. The Idea of You (Implied/non-explicit)
-8. The Outrun (Brief non-sexual rear nudity)
-9. The Bikeriders (Brief non-sexual rear nudity)
-10. Saint Maud (Brief non-sexual rear nudity)
-11. We Live in Time (Brief non-explicit possible)
-12. The Woman in Cabin 10 (Brief non-sexual possible)
-13. Bugonia (Infrequent buttock nudity)
-14. Prime Minister (Very brief, implied non-sexual)
-
-### TV Show Nudity Levels
-
-#### Extreme/High
-- X-Rated Queens (frequent full-frontal)
-- The Hunting Wives (highly explicit)
-
-#### Moderate/Medium
-- Shogun (bathing/sexual context)
-- Pluribus (rear/sex)
-- Landman (partial/sex)
-- The Lovers (partial/sex)
-- Madam (brothel setting)
-- The Monster of Florence (crime scenes)
-- The Waterfront (explicit TV-MA)
-- Prime Suspect (S1) (crime scenes)
-
-#### Mild/Low
-- MAID (brief showering)
-- Tulsa King (stripper scenes)
-- The Pitt (medical chest nudity)
-- Murderbot (android unit during repair)
-- The Crowded Room (brief sexual scenes)
-- Orphan Black: Echoes (brief sexual content)
-- Task (gritty crime)
-- Squid Game (minimal implied)
-- A Spy Among Friends (brief period-appropriate)
-- Spy/Master (minimal)
-
-#### None
-- Mr. Scorsese
-- The Bear
-- Code of Silence
-- I Fought the Law
-- Alien: Earth
-- Dept. Q
-- Black Rabbit
-- Criminal Record
-- Murdaugh
-- IT: Welcome to Derry
-- All Her Fault
-- The Studio
-- Brilliant Minds
-- St. Denis Medical
-- Zero Day
-- The Night Agent
-- Spymaster
-- The Bletchley Circle
-- Mob Land`;
-
-    window.addEventListener('DOMContentLoaded', () => {
-      const { Markmap } = window.markmap;
-      const { Transformer } = window.markmap;
-
-      const transformer = new Transformer();
-      const { root } = transformer.transform(markdown);
-
-      Markmap.create('#mindmap', {
-        colorFreezeLevel: 2,
-        duration: 500,
-        maxWidth: 300,
-        initialExpandLevel: 2
-      }, root);
-    });
-  </script>
+    <script src="https://apis.google.com/js/api.js" async defer onload="gapiLoaded()"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer onload="gisLoaded()"></script>
+    <script src="app.js?v=2"></script>
 </body>
 </html>
