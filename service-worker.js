@@ -1,50 +1,64 @@
-const CACHE_NAME = 'calendar-view-v1';
+// Calendar Service Worker v3 - Network first
+const CACHE_NAME = 'calendar-view-v3';
 const urlsToCache = [
-  '/',
-  '/index.html',
-  '/styles.css',
-  '/app.js',
-  '/manifest.json'
+    './',
+    './index.html',
+    './styles.css',
+    './app.js',
+    './manifest.json',
+    './icon-192.png',
+    './icon-512.png'
 ];
 
-// Install event - cache resources
+// Install - cache resources
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('Opened cache');
-        return cache.addAll(urlsToCache);
-      })
-  );
+    event.waitUntil(
+        caches.open(CACHE_NAME)
+            .then((cache) => cache.addAll(urlsToCache))
+            .catch((err) => console.log('Cache failed:', err))
+    );
+    self.skipWaiting();
 });
 
-// Fetch event - serve from cache when possible
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        // Cache hit - return response
-        if (response) {
-          return response;
-        }
-        return fetch(event.request);
-      }
-    )
-  );
-});
-
-// Activate event - clean up old caches
+// Activate - clean old caches
 self.addEventListener('activate', (event) => {
-  const cacheWhitelist = [CACHE_NAME];
-  event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheWhitelist.indexOf(cacheName) === -1) {
-            return caches.delete(cacheName);
-          }
+    event.waitUntil(
+        caches.keys().then((names) => {
+            return Promise.all(
+                names.map((name) => {
+                    if (name !== CACHE_NAME) {
+                        console.log('Deleting old cache:', name);
+                        return caches.delete(name);
+                    }
+                })
+            );
         })
-      );
-    })
-  );
+    );
+    self.clients.claim();
+});
+
+// Fetch - network first for Google APIs, then cache
+self.addEventListener('fetch', (event) => {
+    const url = new URL(event.request.url);
+
+    // Always network for Google APIs
+    if (url.hostname.includes('googleapis.com') ||
+        url.hostname.includes('accounts.google.com') ||
+        url.hostname.includes('apis.google.com')) {
+        event.respondWith(fetch(event.request));
+        return;
+    }
+
+    // Network first, fallback to cache
+    event.respondWith(
+        fetch(event.request)
+            .then((response) => {
+                if (response.status === 200) {
+                    const clone = response.clone();
+                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+                }
+                return response;
+            })
+            .catch(() => caches.match(event.request))
+    );
 });
