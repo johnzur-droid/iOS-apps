@@ -303,6 +303,13 @@ function filterEvents(events) {
             return false;
         }
 
+        // Exclude graphite colored events (concerts and "maybe" events)
+        // Graphite is color ID "8" in Google Calendar
+        if (event.colorId === '8') {
+            console.log('Excluding graphite event:', event.summary);
+            return false;
+        }
+
         return true;
     });
 }
