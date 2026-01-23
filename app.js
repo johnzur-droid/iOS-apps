@@ -457,6 +457,7 @@ function displayEvents(events) {
 function createEventHTML(event) {
     const title = event.summary || 'No title';
     const isHoliday = isHolidayEvent(event);
+    const calendarName = event.calendarName || '';
 
     let eventDate;
 
@@ -478,6 +479,7 @@ function createEventHTML(event) {
             <span class="event-date-inline">${dateStr}</span>
             <span class="event-separator">•</span>
             <span class="event-title-inline">${escapeHtml(title)}</span>
+            <span class="event-calendar-name">(${escapeHtml(calendarName)})</span>
         </div>
     `;
 }
