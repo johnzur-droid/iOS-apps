@@ -496,7 +496,7 @@ function createEventHTML(event) {
     });
 
     return `
-        <div class="event-item ${isHoliday ? 'holiday' : ''}" style="border-left-color: ${colorHex}">
+        <div class="event-item ${isHoliday ? 'holiday' : ''}" style="border-left-color: ${colorHex}; background-color: ${colorHex};">
             <span class="event-date-inline">${dateStr}</span>
             <span class="event-separator">•</span>
             <span class="event-title-inline">${escapeHtml(title)}</span>
