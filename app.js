@@ -222,6 +222,8 @@ async function loadCalendarEvents() {
                     singleEvents: true, // Expand recurring events
                     maxResults: 250,
                     orderBy: 'startTime',
+                    // CRITICAL FIX: Explicitly request colorId field
+                    fields: 'items(summary,start,end,eventType,recurringEventId,recurrence,colorId)'
                 });
 
                 return {
