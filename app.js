@@ -35,7 +35,7 @@ retryBtn.addEventListener('click', () => {
 function gapiLoaded() {
     if (typeof gapi === 'undefined') {
         console.error('Google API library failed to load');
-        setTimeout(gapiLoaded, 1000); // Retry after 1 second
+        setTimeout(gapiLoaded, 1000);
         return;
     }
     gapi.load('client', async () => {
@@ -59,14 +59,14 @@ function gapiLoaded() {
 function gisLoaded() {
     if (typeof google === 'undefined') {
         console.error('Google Identity Services library failed to load');
-        setTimeout(gisLoaded, 1000); // Retry after 1 second
+        setTimeout(gisLoaded, 1000);
         return;
     }
     try {
         tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: CLIENT_ID,
             scope: SCOPES,
-            callback: '', // defined later
+            callback: '',
         });
         gisInited = true;
         maybeEnableButtons();
@@ -81,7 +81,6 @@ function gisLoaded() {
  */
 function maybeEnableButtons() {
     if (gapiInited && gisInited) {
-        // Check if already authorized
         const token = gapi.client.getToken();
         if (token) {
             console.log('Already authorized, loading events...');
@@ -100,7 +99,6 @@ function maybeEnableButtons() {
 function handleAuthClick() {
     console.log('Auth button clicked');
 
-    // Check if libraries are initialized
     if (!gapiInited || !gisInited) {
         showError('Application not fully loaded. Please wait a moment and try again.');
         console.error('gapiInited:', gapiInited, 'gisInited:', gisInited);
@@ -119,7 +117,6 @@ function handleAuthClick() {
                 showError('Authentication error: ' + resp.error);
                 return;
             }
-            // Mark that user has authorized before
             localStorage.setItem('calendar_authorized', 'true');
             showSection('loading');
             await loadCalendarEvents();
@@ -129,7 +126,6 @@ function handleAuthClick() {
         const hasAuthorizedBefore = localStorage.getItem('calendar_authorized');
 
         if (gapi.client.getToken() === null) {
-            // Use 'select_account' instead of 'consent' to avoid full consent flow every time
             tokenClient.requestAccessToken({ prompt: hasAuthorizedBefore ? '' : 'select_account' });
         } else {
             tokenClient.requestAccessToken({ prompt: '' });
@@ -180,12 +176,10 @@ async function loadCalendarEvents() {
     try {
         showSection('loading');
 
-        // Get date range for next 3 months
         const now = new Date();
         const threeMonthsLater = new Date();
         threeMonthsLater.setMonth(now.getMonth() + 3);
 
-        // Get all calendars
         const calendarListResponse = await gapi.client.calendar.calendarList.list();
         const allCalendars = calendarListResponse.result.items;
 
@@ -194,7 +188,6 @@ async function loadCalendarEvents() {
             return;
         }
 
-        // Filter to only include specific calendars
         const allowedCalendars = ['johnzur@gmail.com', 'tj', 'holiday'];
         const calendars = allCalendars.filter(calendar => {
             const calName = calendar.summary.toLowerCase();
@@ -211,7 +204,6 @@ async function loadCalendarEvents() {
             return;
         }
 
-        // Fetch events from filtered calendars
         const allEventsPromises = calendars.map(async (calendar) => {
             try {
                 const response = await gapi.client.calendar.events.list({
@@ -219,10 +211,9 @@ async function loadCalendarEvents() {
                     timeMin: now.toISOString(),
                     timeMax: threeMonthsLater.toISOString(),
                     showDeleted: false,
-                    singleEvents: true, // Expand recurring events
+                    singleEvents: true,
                     maxResults: 250,
                     orderBy: 'startTime',
-                    // CRITICAL FIX: Explicitly request colorId field
                     fields: 'items(summary,start,end,eventType,recurringEventId,recurrence,colorId)'
                 });
 
@@ -241,7 +232,6 @@ async function loadCalendarEvents() {
 
         const calendarEvents = await Promise.all(allEventsPromises);
 
-        // Flatten and filter events
         let allEvents = [];
         calendarEvents.forEach(({ calendarName, events }) => {
             events.forEach(event => {
@@ -250,17 +240,21 @@ async function loadCalendarEvents() {
             });
         });
 
-        // Filter events based on criteria
+        // DIAGNOSTIC: Log all events with their colorId
+        console.log('=== ALL EVENTS WITH COLOR INFO ===');
+        allEvents.forEach(event => {
+            console.log(`Event: "${event.summary}" | ColorId: "${event.colorId}" | Calendar: "${event.calendarName}"`);
+        });
+        console.log('=== END COLOR INFO ===');
+
         const filteredEvents = filterEvents(allEvents);
 
-        // Sort events by date
         filteredEvents.sort((a, b) => {
             const dateA = new Date(a.start.dateTime || a.start.date);
             const dateB = new Date(b.start.dateTime || b.start.date);
             return dateA - dateB;
         });
 
-        // Display events
         displayEvents(filteredEvents);
 
     } catch (error) {
@@ -284,29 +278,23 @@ function filterEvents(events) {
     return events.filter(event => {
         const title = (event.summary || '').toLowerCase();
 
-        // Exclude birthdays
         if (event.eventType === 'birthday' || title.includes('birthday')) {
             return false;
         }
 
-        // Exclude Martin Luther King Day
         if (title.includes('martin luther king')) {
             return false;
         }
 
-        // Exclude recurring events (keep single instances from expanded recurring events)
-        // If the event has a recurringEventId, it's an instance of a recurring event
         if (event.recurringEventId) {
             return false;
         }
 
-        // Exclude events with recurrence rules (unexpanded recurring events)
         if (event.recurrence && event.recurrence.length > 0) {
             return false;
         }
 
-        // Exclude graphite colored events (concerts and "maybe" events)
-        // Graphite is color ID "8" in Google Calendar
+        // Exclude graphite colored events (colorId 8)
         if (event.colorId === '8') {
             console.log('Excluding graphite event:', event.summary);
             return false;
@@ -326,17 +314,13 @@ function displayEvents(events) {
         return;
     }
 
-    // Group events by month
     const eventsByMonth = {};
     events.forEach(event => {
-        // Parse date correctly to avoid timezone issues
         let eventDate;
         if (event.start.date) {
-            // All-day event - parse without timezone conversion
             const [year, month, day] = event.start.date.split('-').map(Number);
             eventDate = new Date(year, month - 1, day);
         } else {
-            // Timed event
             eventDate = new Date(event.start.dateTime);
         }
 
@@ -353,7 +337,6 @@ function displayEvents(events) {
         eventsByMonth[monthKey].events.push(event);
     });
 
-    // Build HTML
     let html = '';
     Object.keys(eventsByMonth).sort().forEach(monthKey => {
         const month = eventsByMonth[monthKey];
@@ -370,21 +353,18 @@ function displayEvents(events) {
 }
 
 /**
- * Create HTML for a single event (simplified single line format)
+ * Create HTML for a single event
  */
 function createEventHTML(event) {
     const title = event.summary || 'No title';
     const isHoliday = isHolidayEvent(event);
 
-    // Format date - simple format: "Mon, Dec 5"
     let eventDate;
 
     if (event.start.date) {
-        // All-day event - parse date without timezone conversion
         const [year, month, day] = event.start.date.split('-').map(Number);
         eventDate = new Date(year, month - 1, day);
     } else {
-        // Timed event - use dateTime
         eventDate = new Date(event.start.dateTime);
     }
 
@@ -410,12 +390,10 @@ function isHolidayEvent(event) {
     const title = (event.summary || '').toLowerCase();
     const calendarName = (event.calendarName || '').toLowerCase();
 
-    // Check if from holidays calendar
     if (calendarName.includes('holiday')) {
         return true;
     }
 
-    // Check for common holiday keywords
     const holidayKeywords = [
         'holiday', 'christmas', 'thanksgiving', 'new year',
         'independence day', 'memorial day', 'labor day',
