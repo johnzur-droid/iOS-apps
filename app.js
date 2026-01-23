@@ -452,12 +452,33 @@ function displayEvents(events) {
 }
 
 /**
+ * Get color hex code for Google Calendar color ID
+ */
+function getEventColor(colorId) {
+    const colors = {
+        '1': '#a4bdfc',  // Lavender
+        '2': '#7ae7bf',  // Sage
+        '3': '#dbadff',  // Grape
+        '4': '#ff887c',  // Flamingo
+        '5': '#fbd75b',  // Banana
+        '6': '#ffb878',  // Tangerine
+        '7': '#46d6db',  // Peacock
+        '8': '#e1e1e1',  // Graphite
+        '9': '#5484ed',  // Blueberry
+        '10': '#51b749', // Basil
+        '11': '#dc2127'  // Tomato
+    };
+    return colors[colorId] || '#667eea'; // Default purple if no color
+}
+
+/**
  * Create HTML for a single event
  */
 function createEventHTML(event) {
     const title = event.summary || 'No title';
     const isHoliday = isHolidayEvent(event);
     const calendarName = event.calendarName || '';
+    const colorHex = getEventColor(event.colorId);
 
     let eventDate;
 
@@ -475,7 +496,7 @@ function createEventHTML(event) {
     });
 
     return `
-        <div class="event-item ${isHoliday ? 'holiday' : ''}">
+        <div class="event-item ${isHoliday ? 'holiday' : ''}" style="border-left-color: ${colorHex}">
             <span class="event-date-inline">${dateStr}</span>
             <span class="event-separator">•</span>
             <span class="event-title-inline">${escapeHtml(title)}</span>
