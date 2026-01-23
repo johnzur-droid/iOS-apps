@@ -17,6 +17,7 @@ const eventsList = document.getElementById('eventsList');
 const errorMessage = document.getElementById('errorMessage');
 const authorizeBtn = document.getElementById('authorizeBtn');
 const refreshBtn = document.getElementById('refreshBtn');
+const showAllBtn = document.getElementById('showAllBtn');
 const retryBtn = document.getElementById('retryBtn');
 
 // Event listeners
@@ -25,6 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 authorizeBtn.addEventListener('click', handleAuthClick);
 refreshBtn.addEventListener('click', loadCalendarEvents);
+showAllBtn.addEventListener('click', loadAllEvents);
 retryBtn.addEventListener('click', () => {
     showSection('auth');
 });
@@ -259,6 +261,87 @@ async function loadCalendarEvents() {
 
     } catch (error) {
         console.error('Error loading calendar events:', error);
+        let errorMsg = 'Failed to load calendar events. ';
+        if (error.result && error.result.error) {
+            errorMsg += error.result.error.message;
+        } else if (error.message) {
+            errorMsg += error.message;
+        } else {
+            errorMsg += 'Please try again.';
+        }
+        showError(errorMsg);
+    }
+}
+
+/**
+ * Load ALL events from ALL calendars (30 days, no filtering)
+ */
+async function loadAllEvents() {
+    try {
+        showSection('loading');
+
+        const now = new Date();
+        const thirtyDaysLater = new Date();
+        thirtyDaysLater.setDate(now.getDate() + 30);
+
+        const calendarListResponse = await gapi.client.calendar.calendarList.list();
+        const allCalendars = calendarListResponse.result.items;
+
+        if (!allCalendars || allCalendars.length === 0) {
+            showError('No calendars found');
+            return;
+        }
+
+        console.log('Loading ALL calendars:', allCalendars.map(c => c.summary));
+
+        const allEventsPromises = allCalendars.map(async (calendar) => {
+            try {
+                const response = await gapi.client.calendar.events.list({
+                    calendarId: calendar.id,
+                    timeMin: now.toISOString(),
+                    timeMax: thirtyDaysLater.toISOString(),
+                    showDeleted: false,
+                    singleEvents: true,
+                    maxResults: 250,
+                    orderBy: 'startTime',
+                    fields: 'items(summary,start,end,eventType,recurringEventId,recurrence,colorId)'
+                });
+
+                return {
+                    calendarName: calendar.summary,
+                    events: response.result.items || []
+                };
+            } catch (error) {
+                console.error(`Error fetching events from ${calendar.summary}:`, error);
+                return {
+                    calendarName: calendar.summary,
+                    events: []
+                };
+            }
+        });
+
+        const calendarEvents = await Promise.all(allEventsPromises);
+
+        let allEvents = [];
+        calendarEvents.forEach(({ calendarName, events }) => {
+            events.forEach(event => {
+                event.calendarName = calendarName;
+                allEvents.push(event);
+            });
+        });
+
+        console.log(`Loaded ${allEvents.length} total events (unfiltered)`);
+
+        allEvents.sort((a, b) => {
+            const dateA = new Date(a.start.dateTime || a.start.date);
+            const dateB = new Date(b.start.dateTime || b.start.date);
+            return dateA - dateB;
+        });
+
+        displayEvents(allEvents);
+
+    } catch (error) {
+        console.error('Error loading all events:', error);
         let errorMsg = 'Failed to load calendar events. ';
         if (error.result && error.result.error) {
             errorMsg += error.result.error.message;

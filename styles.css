@@ -27,14 +27,17 @@ header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 10px;
 }
 
 h1 {
     font-size: 24px;
     font-weight: 600;
+    flex: 1;
 }
 
-.refresh-btn {
+.refresh-btn,
+.show-all-btn {
     background: rgba(255, 255, 255, 0.2);
     border: none;
     color: white;
@@ -45,7 +48,8 @@ h1 {
     transition: background 0.3s;
 }
 
-.refresh-btn:hover {
+.refresh-btn:hover,
+.show-all-btn:hover {
     background: rgba(255, 255, 255, 0.3);
 }
 
