@@ -1,6 +1,6 @@
 // Google Calendar API Configuration
 const CLIENT_ID = '457025763296-osgitgjro33vo2tcc5d2d596isroij5v.apps.googleusercontent.com';
-const API_KEY = 'AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco';
+const API_KEY = 'AIzaSyBw_j5Lj4IXYwkeEgJW1MgpzhP0jUK6fF4';
 const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest';
 const SCOPES = 'https://www.googleapis.com/auth/calendar.readonly';
 
