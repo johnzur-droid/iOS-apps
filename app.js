@@ -86,10 +86,14 @@ function maybeEnableButtons() {
         const token = gapi.client.getToken();
         if (token) {
             console.log('Already authorized, loading events...');
+            refreshBtn.classList.remove('hidden');
+            showAllBtn.classList.remove('hidden');
             showSection('loading');
             loadCalendarEvents();
         } else {
             console.log('Not authorized, showing auth button');
+            refreshBtn.classList.add('hidden');
+            showAllBtn.classList.add('hidden');
             showSection('auth');
         }
     }
@@ -120,6 +124,8 @@ function handleAuthClick() {
                 return;
             }
             localStorage.setItem('calendar_authorized', 'true');
+            refreshBtn.classList.remove('hidden');
+            showAllBtn.classList.remove('hidden');
             showSection('loading');
             await loadCalendarEvents();
         };
@@ -175,6 +181,11 @@ function showError(message) {
  * Load calendar events from all calendars
  */
 async function loadCalendarEvents() {
+    if (!gapi.client.getToken()) {
+        showError('Please connect your Google Calendar first');
+        return;
+    }
+
     try {
         showSection('loading');
 
@@ -277,6 +288,11 @@ async function loadCalendarEvents() {
  * Load ALL events from ALL calendars (30 days, no filtering)
  */
 async function loadAllEvents() {
+    if (!gapi.client.getToken()) {
+        showError('Please connect your Google Calendar first');
+        return;
+    }
+
     try {
         showSection('loading');
 
