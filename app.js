@@ -232,12 +232,14 @@ async function loadCalendarEvents() {
 
                 return {
                     calendarName: calendar.summary,
+                    calendarColor: calendar.backgroundColor,
                     events: response.result.items || []
                 };
             } catch (error) {
                 console.error(`Error fetching events from ${calendar.summary}:`, error);
                 return {
                     calendarName: calendar.summary,
+                    calendarColor: calendar.backgroundColor,
                     events: []
                 };
             }
@@ -246,9 +248,10 @@ async function loadCalendarEvents() {
         const calendarEvents = await Promise.all(allEventsPromises);
 
         let allEvents = [];
-        calendarEvents.forEach(({ calendarName, events }) => {
+        calendarEvents.forEach(({ calendarName, calendarColor, events }) => {
             events.forEach(event => {
                 event.calendarName = calendarName;
+                event.calendarColor = calendarColor;
                 allEvents.push(event);
             });
         });
@@ -325,12 +328,14 @@ async function loadAllEvents() {
 
                 return {
                     calendarName: calendar.summary,
+                    calendarColor: calendar.backgroundColor,
                     events: response.result.items || []
                 };
             } catch (error) {
                 console.error(`Error fetching events from ${calendar.summary}:`, error);
                 return {
                     calendarName: calendar.summary,
+                    calendarColor: calendar.backgroundColor,
                     events: []
                 };
             }
@@ -339,9 +344,10 @@ async function loadAllEvents() {
         const calendarEvents = await Promise.all(allEventsPromises);
 
         let allEvents = [];
-        calendarEvents.forEach(({ calendarName, events }) => {
+        calendarEvents.forEach(({ calendarName, calendarColor, events }) => {
             events.forEach(event => {
                 event.calendarName = calendarName;
+                event.calendarColor = calendarColor;
                 allEvents.push(event);
             });
         });
@@ -478,7 +484,14 @@ function createEventHTML(event) {
     const title = event.summary || 'No title';
     const isHoliday = isHolidayEvent(event);
     const calendarName = event.calendarName || '';
-    const colorHex = getEventColor(event.colorId);
+
+    // Use event's colorId if set, otherwise use calendar's backgroundColor
+    let colorHex;
+    if (event.colorId) {
+        colorHex = getEventColor(event.colorId);
+    } else {
+        colorHex = event.calendarColor || '#667eea';
+    }
 
     let eventDate;
 
