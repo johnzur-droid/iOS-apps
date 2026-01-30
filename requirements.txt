@@ -1,0 +1,5 @@
+# Dependencies for The Zur Protocol Manuscript Navigation Repair Tool
+# Install with: pip install -r requirements.txt
+
+python-docx>=0.8.11
+lxml>=4.9.0
