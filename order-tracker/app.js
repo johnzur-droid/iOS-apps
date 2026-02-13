@@ -1,11 +1,20 @@
 // Order Tracker - Gmail API Integration
 // Scans Gmail for order confirmations from the last 60 days
 
-// Google API Configuration (uses same credentials as calendar app)
-const CLIENT_ID = '457025763296-osgitgjro33vo2tcc5d2d596isroij5v.apps.googleusercontent.com';
-const API_KEY = 'AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco';
-const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest';
-const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly';
+// Google API Configuration
+// Credentials are loaded from config.js (gitignored). See config.example.js for setup.
+if (typeof GCP_CONFIG === 'undefined') {
+    document.addEventListener('DOMContentLoaded', () => {
+        document.body.innerHTML = '<div style="padding:2rem;text-align:center;font-family:sans-serif;">' +
+            '<h2>Configuration Required</h2>' +
+            '<p>Copy <code>config.example.js</code> to <code>config.js</code> and add your Google API credentials.</p></div>';
+    });
+    throw new Error('config.js not found. Copy config.example.js to config.js and add your credentials.');
+}
+const CLIENT_ID = GCP_CONFIG.CLIENT_ID;
+const API_KEY = GCP_CONFIG.API_KEY;
+const DISCOVERY_DOC = GCP_CONFIG.DISCOVERY_DOC;
+const SCOPES = GCP_CONFIG.SCOPES;
 
 let tokenClient;
 let gapiInited = false;

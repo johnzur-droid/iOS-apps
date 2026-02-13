@@ -117,17 +117,25 @@ Mon, Jan 20 • Presidents Day (highlighted in red)
 
 ### Step 2: Configure the App
 
-#### 2.1 Update Credentials in Code
-1. Open `app.js`
-2. At the top of the file, replace these lines:
-   ```javascript
-   const CLIENT_ID = 'YOUR_CLIENT_ID_HERE';
-   const API_KEY = 'YOUR_API_KEY_HERE';
+#### 2.1 Set Up Credentials (Zero-Code Storage)
+Credentials are stored in `config.js` files that are **gitignored** and never committed to version control.
+
+1. Copy the example config for the calendar app:
+   ```bash
+   cp config.example.js config.js
    ```
-   With your actual credentials:
+2. Copy the example config for the order tracker:
+   ```bash
+   cp order-tracker/config.example.js order-tracker/config.js
+   ```
+3. Edit each `config.js` and fill in your Google API credentials:
    ```javascript
-   const CLIENT_ID = '457025763296-osgitgjro33vo2tcc5d2d596isroij5v.apps.googleusercontent.com';
-   const API_KEY = 'AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco';
+   const GCP_CONFIG = {
+       CLIENT_ID: 'your-client-id.apps.googleusercontent.com',
+       API_KEY: 'your-api-key-here',  // order-tracker only
+       DISCOVERY_DOC: '...',
+       SCOPES: '...'
+   };
    ```
 
 #### 2.2 Customize Calendar Filters (Optional)
@@ -281,39 +289,51 @@ Events are filtered based on Google's API properties. If an event appears recurr
 
 ```
 iOS-apps/
-├── index.html           # Main app interface
-├── app.js              # Calendar logic and Google API integration
-├── styles.css          # Styling and layout
-├── manifest.json       # PWA configuration
-├── service-worker.js   # Offline caching
-├── icon-192.png        # App icon (192x192)
-├── icon-512.png        # App icon (512x512)
-├── generate_icons.py   # Script to generate icons
-├── create-icons.html   # Icon generator utility
-└── README.md          # This file
+├── index.html              # Main app interface
+├── app.js                  # Calendar logic and Google API integration
+├── config.js               # API credentials (gitignored - local only)
+├── config.example.js       # Template for config.js (committed)
+├── styles.css              # Styling and layout
+├── manifest.json           # PWA configuration
+├── service-worker.js       # Offline caching
+├── icon-192.png            # App icon (192x192)
+├── icon-512.png            # App icon (512x512)
+├── generate_icons.py       # Script to generate icons
+├── create-icons.html       # Icon generator utility
+├── .gitignore              # Prevents credentials from being committed
+├── SECURITY.md             # GCP security best practices
+├── README.md               # This file
+└── order-tracker/          # Order tracking PWA
+    ├── index.html
+    ├── app.js
+    ├── config.js            # API credentials (gitignored - local only)
+    ├── config.example.js    # Template for config.js (committed)
+    ├── styles.css
+    ├── manifest.json
+    ├── service-worker.js
+    └── icons
 ```
 
 ---
 
 ## 🔐 Security & Privacy
 
+- **Zero-code storage:** API keys and Client IDs are loaded from `config.js` (gitignored), never hardcoded in source
 - **No data storage:** Events are only cached locally on your device
-- **Read-only access:** App only requests calendar read permissions
+- **Read-only access:** App only requests calendar/gmail read permissions
 - **No backend:** All processing happens in your browser
 - **Direct to Google:** Authentication happens directly with Google
 - **Open source:** All code is visible in the repository
+- **See `SECURITY.md`** for full GCP security best practices
 
 ---
 
 ## ⚙️ Technical Details
 
 ### API Credentials
-- **Client ID:** `457025763296-osgitgjro33vo2tcc5d2d596isroij5v.apps.googleusercontent.com`
-- **API Key:** `AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco`
+Credentials are stored in local `config.js` files (gitignored). See `config.example.js` for the template. See `SECURITY.md` for best practices on managing your GCP credentials.
 
 ### Deployment
-- **Live URL:** https://johnzur-droid.github.io/iOS-apps/
-- **Branch:** `claude/iphone-calendar-widget-017CoV7YLXq9zcgiJQkfKsT5`
 - **Platform:** GitHub Pages
 
 ### Calendar Filtering Logic
@@ -376,8 +396,8 @@ const allowedCalendars = ['johnzur@gmail.com', 'tj', 'holiday'];
 4. Clear cache and reload
 
 ### To Update Credentials
-1. Edit `CLIENT_ID` and `API_KEY` in `app.js`
-2. Commit and push
+1. Edit your local `config.js` (and `order-tracker/config.js`)
+2. These files are gitignored, so redeploy them manually to your hosting environment
 3. Update authorized origins in Google Cloud Console if needed
 
 ---
