@@ -84,7 +84,9 @@ Mon, Jan 20 • Presidents Day (highlighted in red)
 1. In left sidebar: **APIs & Services** → **Credentials**
 2. Click **+ CREATE CREDENTIALS** → **API key**
 3. Copy the API key (save it for later)
-4. (Optional) Click **EDIT API KEY** to restrict it to Google Calendar API only
+4. **IMPORTANT:** Click **EDIT API KEY** and apply these restrictions:
+   - Under **API restrictions**, select **Restrict key** and choose **Google Calendar API** only
+   - Under **Application restrictions**, select **HTTP referrers** and add your deployment URL (e.g., `https://johnzur-droid.github.io/*`)
 
 #### 1.4 Configure OAuth Consent Screen
 1. In left sidebar: **OAuth consent screen**
@@ -124,10 +126,10 @@ Mon, Jan 20 • Presidents Day (highlighted in red)
    const CLIENT_ID = 'YOUR_CLIENT_ID_HERE';
    const API_KEY = 'YOUR_API_KEY_HERE';
    ```
-   With your actual credentials:
+   With your actual credentials from the Google Cloud Console:
    ```javascript
-   const CLIENT_ID = '457025763296-osgitgjro33vo2tcc5d2d596isroij5v.apps.googleusercontent.com';
-   const API_KEY = 'AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco';
+   const CLIENT_ID = 'YOUR_ACTUAL_CLIENT_ID';
+   const API_KEY = 'YOUR_ACTUAL_API_KEY';
    ```
 
 #### 2.2 Customize Calendar Filters (Optional)
@@ -298,18 +300,38 @@ iOS-apps/
 ## 🔐 Security & Privacy
 
 - **No data storage:** Events are only cached locally on your device
-- **Read-only access:** App only requests calendar read permissions
+- **Read-only access:** App only requests calendar read permissions (`calendar.readonly`)
 - **No backend:** All processing happens in your browser
 - **Direct to Google:** Authentication happens directly with Google
 - **Open source:** All code is visible in the repository
+
+### Google Cloud Security Best Practices
+
+Since this is a client-side app, the API Key and Client ID must be present in `app.js`. To protect them:
+
+1. **Restrict your API Key** (Google Cloud Console > Credentials > Edit API Key):
+   - Set **API restrictions** to only allow **Google Calendar API**
+   - Set **Application restrictions** to **HTTP referrers** and add your deployment URL (e.g., `https://johnzur-droid.github.io/*`)
+
+2. **Restrict your OAuth Client ID**:
+   - Only add **Authorized JavaScript origins** for your actual deployment domains
+   - Remove any localhost origins before going to production
+
+3. **Audit dormant keys**: Periodically review your credentials in the Google Cloud Console and delete any keys that are no longer in use
+
+4. **Rotate keys periodically**: Generate new API keys on a regular schedule and update `app.js` accordingly
+
+5. **Monitor usage**: Set up billing alerts and anomaly detection in Google Cloud Console to catch unauthorized usage early
+
+6. **Do not duplicate credentials in documentation** -- keep them only in the code where they are needed
 
 ---
 
 ## ⚙️ Technical Details
 
 ### API Credentials
-- **Client ID:** `457025763296-osgitgjro33vo2tcc5d2d596isroij5v.apps.googleusercontent.com`
-- **API Key:** `AIzaSyCd0_nribWi82phleLUjuYfBcNJ-KNXMco`
+- **Client ID:** Configured in `app.js` (do not commit to documentation)
+- **API Key:** Configured in `app.js` (do not commit to documentation)
 
 ### Deployment
 - **Live URL:** https://johnzur-droid.github.io/iOS-apps/
